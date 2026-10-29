@@ -4417,6 +4417,59 @@ describe("executeNativeSession recovery", () => {
     completeTerminatedRemoteNativeSessionCleanup({ ...binding, remoteCleanupScope: "other-sandbox" });
   });
 
+  it("isolates an uncleanable session to its Issue while preserving same-Issue quarantine", async () => {
+    const companyId = "issue-isolation-company";
+    const problemIdentity = { ...identity, companyId, issueId: "problem-issue",
+      runId: "problem-run", sessionId: "problem-session" };
+    const otherIdentity = { ...identity, companyId, issueId: "other-issue",
+      runId: "other-run", sessionId: "other-session" };
+    const runFailure = new Error("provider turn interrupted");
+    const closeFailure = new NativeSessionCloseUnrecoverableError();
+    const capabilities = { resume: true, typedEvents: true, steering: false,
+      interruption: false, structuredResult: true };
+    const makeSession = (sessionIdentity: NativeRunIdentity, fail: boolean): NativeSession => ({
+      identity: () => sessionIdentity,
+      capabilities: async () => capabilities,
+      async *events() {
+        if (fail) throw runFailure;
+        yield runnerEvent(1, "turn.completed");
+      },
+      startTurn: async () => ({ turnId: "isolation-turn" }),
+      result: async () => ({ result, terminal, turnId: "isolation-turn" }),
+      async snapshot() {
+        return { backendKind: "mock", sessionId: sessionIdentity.sessionId,
+          identity: sessionIdentity, providerSessionId: sessionIdentity.sessionId,
+          cursor: null, activeTurnId: null, pendingRuntimeRequests: [], lineage: [] };
+      },
+      close: async () => { if (fail) throw closeFailure; },
+    });
+    const sessions = [makeSession(problemIdentity, true), makeSession(otherIdentity, false)];
+    const backend: NativeSessionBackend = {
+      descriptor: async () => ({ kind: "mock", name: "issue-isolation-backend",
+        version: "1", capabilities }),
+      openSession: vi.fn(async () => sessions.shift()!),
+    };
+    const controlPlane: ControlPlanePort = {
+      openRun: async () => {}, checkpointSession: async () => {},
+      appendEvent: async () => ({ cursor: 1, highestContiguousSourceSeq: 1, disposition: "committed" }),
+      replayEvents: async () => ({ events: [], highestContiguousSourceSeq: 0 }),
+      completeRun: async () => {},
+    };
+    const execute = (target: typeof problemIdentity) => executeNativeSession({
+      input: { ...input, binding: { ...input.binding, companyId, issueId: target.issueId, runId: target.runId },
+        session: { ...input.session, normalizedSessionId: target.sessionId } },
+      backend, controlPlane, runnerInstanceId: "issue-isolation-runner",
+      controlPlaneInstanceId: "issue-isolation-control", requireSessionCloseBeforeReturn: true,
+    });
+
+    await expect(execute(problemIdentity)).rejects.toMatchObject({ cleanupError: closeFailure });
+    await expect(execute(otherIdentity)).resolves.toMatchObject({ result });
+    await expect(execute(problemIdentity)).rejects.toBeInstanceOf(NativeSessionCleanupQuarantinedError);
+    expect(backend.openSession).toHaveBeenCalledTimes(2);
+    expect(completeTerminatedLocalNativeSessionCleanup({ companyId, runId: problemIdentity.runId,
+      runnerInstanceId: "issue-isolation-runner" })).toBe(true);
+  });
+
   it("retires local quarantine only for the stopped run and runner instance", async () => {
     const scopedIdentity = { ...identity, companyId: "local-stop-company", runId: "local-stop-run" };
     const binding = { ...scopedIdentity, runnerInstanceId: "local-runner" };

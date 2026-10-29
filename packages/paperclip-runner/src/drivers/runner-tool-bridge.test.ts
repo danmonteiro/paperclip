@@ -139,7 +139,7 @@ describe("runner semantic MCP bridge", () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         tool: "documents.read",
-        callId: "call-1",
+        callId: expect.stringMatching(/^[0-9a-f]{16}:call-1$/),
         arguments: { id: "doc" },
       }),
     );
@@ -213,6 +213,21 @@ describe("runner semantic MCP bridge", () => {
       params: { name: "documents.read", arguments: { kind: "string" } },
     });
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("namespaces durable call identities across replacement provider bridges", async () => {
+    const handler = vi.fn(async ({ callId }) => ({ callId }));
+    const first = await startRunnerToolBridge({ tools: [tool("documents.read")], handler });
+    const second = await startRunnerToolBridge({ tools: [tool("documents.read")], handler });
+    bridges.push(first, second);
+
+    await rpc(first, { id: "2", method: "tools/call", params: { name: "documents.read", arguments: {} } });
+    await rpc(second, { id: "2", method: "tools/call", params: { name: "documents.read", arguments: {} } });
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[0]![0].callId).not.toBe(handler.mock.calls[1]![0].callId);
+    expect(handler.mock.calls[0]![0].callId.split(":").at(-1)).toBe("2");
+    expect(handler.mock.calls[1]![0].callId.split(":").at(-1)).toBe("2");
   });
 
   it("times out calls", async () => {
@@ -558,11 +573,13 @@ describe("Copilot semantic receipt opt-in", () => {
     await vi.waitFor(() => expect(pending.size).toBe(2));
     const normalizedFirst = validatePrpStructuredRunResult(rawFinish); const normalizedSecond = validatePrpStructuredRunResult(secondInput);
     if (!normalizedFirst.ok || !normalizedSecond.ok) throw new Error("Invalid fixture");
-    pending.get("second")!.capture(normalizedSecond.result)(); pending.get("second")!.settle();
+    const secondCall = [...pending.entries()].find(([callId]) => callId.endsWith(":second"))?.[1];
+    const firstCall = [...pending.entries()].find(([callId]) => callId.endsWith(":first"))?.[1];
+    secondCall!.capture(normalizedSecond.result)(); secondCall!.settle();
     const secondReceipt = readNativeSemanticReceipt({ contents: (await (await second).json()).result.content });
     expect(secondReceipt).toMatchObject({ inputSha256: semanticInputSha256(secondInput), normalizedInputSha256: semanticInputSha256(normalizedSecond.result) });
-    pending.get("second")!.capture(normalizedFirst.result)();
-    pending.get("first")!.capture(normalizedFirst.result)(); pending.get("first")!.settle();
+    secondCall!.capture(normalizedFirst.result)();
+    firstCall!.capture(normalizedFirst.result)(); firstCall!.settle();
     const firstReceipt = readNativeSemanticReceipt({ contents: (await (await first).json()).result.content });
     expect(firstReceipt).toMatchObject({ inputSha256: semanticInputSha256(rawFinish), normalizedInputSha256: semanticInputSha256(normalizedFirst.result) });
     expect(receipts).toEqual([secondReceipt, firstReceipt]);
