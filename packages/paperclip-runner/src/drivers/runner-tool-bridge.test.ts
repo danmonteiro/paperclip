@@ -139,7 +139,7 @@ describe("runner semantic MCP bridge", () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         tool: "documents.read",
-        callId: expect.stringMatching(/^[0-9a-f]{16}:call-1$/),
+        callId: expect.stringMatching(/^[0-9a-f]{16}:string:call-1$/),
         arguments: { id: "doc" },
       }),
     );
@@ -213,6 +213,9 @@ describe("runner semantic MCP bridge", () => {
       params: { name: "documents.read", arguments: { kind: "string" } },
     });
     expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[0]![0].callId).not.toBe(handler.mock.calls[1]![0].callId);
+    expect(handler.mock.calls.map(([call]) => call.callId.split(":").slice(-2).join(":")))
+      .toEqual(["number:1", "string:1"]);
   });
 
   it("namespaces durable call identities across replacement provider bridges", async () => {
@@ -226,8 +229,8 @@ describe("runner semantic MCP bridge", () => {
 
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler.mock.calls[0]![0].callId).not.toBe(handler.mock.calls[1]![0].callId);
-    expect(handler.mock.calls[0]![0].callId.split(":").at(-1)).toBe("2");
-    expect(handler.mock.calls[1]![0].callId.split(":").at(-1)).toBe("2");
+    expect(handler.mock.calls[0]![0].callId.split(":").slice(-2).join(":")).toBe("string:2");
+    expect(handler.mock.calls[1]![0].callId.split(":").slice(-2).join(":")).toBe("string:2");
   });
 
   it("times out calls", async () => {
