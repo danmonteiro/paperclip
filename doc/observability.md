@@ -2050,3 +2050,42 @@ PostgreSQL benchmark with 114 mixed skills and at least 400 remote files. It
 reports one cold sample and ten warm samples (one in a new process), refresh and
 fetch counts, rebuilds, missing entries, and content checks. Upstream responses are
 deterministic fixtures; use real deployed run spans for user-facing latency.
+
+## Invocation and native turn attribution (v1)
+
+The existing opt-in OTLP endpoint gate also controls invocation timing. No new
+exporter is installed. Generic plugin timing uses `span.record`, still gated by
+`environment.drivers.register` or `workspaces.manage`, and the host-owned invocation ID. The host clamps
+names, attributes, status and timestamps again. A worker cannot choose a trace
+parent. Existing provider `startSpan` calls are retained as children of the
+worker receipt. `ctx.tracer.withSpan` supplies async-local nesting; it is optional
+for compatibility with older SDK fixtures. The host generates each child span's
+identity. Receipts are limited to 256 nodes and 12 levels. Missing, invalid,
+expired and cross-invocation context cannot select another call's parent.
+
+| Boundary | Coverage | Owner and clock | Meaning / limit |
+| --- | --- | --- | --- |
+| Dispatch / receipt / return | `execution.plugin_dispatch` → `plugin.worker` | Host invocation; worker monotonic durations anchored to its epoch start | Outer minus worker time is an unattributed dispatch/scheduling remainder. It is not network latency. |
+| Repeated host reads | `plugin.host.identity.read`, `config.read`, `progress.read`, `progress.write` | Worker invocation, one span per awaited call, bounded by receipt budget | Round trip and host service together. Span count is call count; overlapping reads are not additive. |
+| Plugin coordination | `plugin.storage.queue`, `storage.execute`, `runtime.queue`, `runtime.prepare`, `runtime.reconcile`, `runtime.verify`, `workspace.prepare` | Invoking plugin, monotonic durations | The plugin keeps its locking and authorization owners. `plugin.reused` is boolean. |
+| Remote operation receipt | `plugin.launcher.request` → `plugin.remote.operation` | Remote monotonic offsets, checked against local round trip and parent bounds | Closed operation classes cover mount refresh, guest setup, process execution, scripts and cleanup. No remote wall-clock subtraction. |
+| Retained/cold transport | `runner.transport.attach`, `resume`, `cold_start`, `prepare`, `registration`, `provider_identity` | Controller process, current active context on every operation | A retained transport must not capture the preceding run's trace. These parents overlap their children. |
+| Command and provider admission | `runner.transport.turn_start`, `command_ack`, `started_event`; optional ACPX `runner.remote.turn_start` → `runner.sidecar.turn_start` → `status_read`, `prompt_started` | Local monotonic spans; remote numeric durations anchored at receipt | Command ACK proves durable command completion. ACPX `promptStarted` proves the runtime prompt-start barrier, not a model token or provider queue exit. SDK-internal work stays opaque. |
+| Durable events | `runner.event.persist` with bounded event kind | Host-local monotonic interval | Receipt through event transaction commit, before live publication. Duplicate receipts are not new provider starts. |
+| First event / first text | Existing `provider.time_to_first_agent_event`, `task.time_to_first_token`; `response.first_nonempty_text` | Durable event observations | First event can be a tool; text must be nonempty and pass the existing deliverable-text observer. |
+| Completion | `completion.request.first`, existing `tool.request.input_stream`, `completion.tool_accepted`, `completion.result_committed` | Same turn; provider tool identity retained only in memory | Input-stream end is the last observed argument update. `run.result.proposed` is the validated tool receipt; `run.result.accepted` is later result finalization. Neither certifies response publication. |
+| Reply commit / publication | Existing response transaction/write/publish phases | Response owner, transaction and local publication | Keep separate from tool acceptance and first text. |
+| Input/context | `inputBytes`, `toolSchemaBytes`, `toolCount`, `contextReused`, `tokenDataAvailable` | Controller numeric/boolean metadata | Counts only. No prompts, instructions, tool arguments or credentials. Token/cache counters remain unavailable unless supplied by a provider with known semantics. Model/effort stay in existing effective run settings. |
+
+Remote receipt spans use their measured duration and causal bounds. Their absolute
+placement inside a round trip remains uncertain by transport/scheduling time.
+Never add parent and child widths, sum concurrent host reads, or label this
+remainder inference or network delay. Failure receipts carry status codes without
+exception text. Incomplete or malformed receipts are discarded without affecting
+execution. A receipt cap can omit further detail; it does not truncate work.
+
+The linked private implementation owns its remote stage names and protocol.
+Core contains generic operation semantics only. Before using this coverage to
+rank optimizations, deploy a compatible source set and inspect actual collector
+exports for parentage, concurrent ownership, widths and closed failure spans.
+Unit tests do not establish ingestion or a latency improvement.

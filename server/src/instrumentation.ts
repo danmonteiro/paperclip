@@ -244,7 +244,7 @@ export function recordProviderPluginSpan(input: {
   startTimeMs?: number;
   /** The optional span end time as an epoch-millisecond number. */
   endTimeMs?: number;
-}): void {
+}): ParsedTraceparent | undefined {
   try {
     const require = createRequire(import.meta.url);
     const api = require("@opentelemetry/api") as {
@@ -273,12 +273,14 @@ export function recordProviderPluginSpan(input: {
         ? { attributes: input.attributes, startTime: input.startTimeMs }
         : { attributes: input.attributes };
     const span = tracer.startSpan(input.name, startSpanOptions, parentContext);
+    const childParent = (span as typeof span & { spanContext?(): ParsedTraceparent }).spanContext?.();
     if (input.status) span.setStatus(input.status);
     // Pass the true end time to `span.end`, so the span ends at its real
     // wall-clock end and shows its true native width. When the end time is
     // absent, the span ends now, so its native width is near zero.
     if (input.endTimeMs !== undefined) span.end(input.endTimeMs);
     else span.end();
+    return childParent;
   } catch {
     // Observability must not change control flow.
   }

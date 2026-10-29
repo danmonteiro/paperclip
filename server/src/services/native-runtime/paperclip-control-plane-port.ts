@@ -86,6 +86,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
   #sessionId: string | null = null;
   readonly #assertControllerActive?: () => void;
   readonly #assertRunAdmissionActive?: () => void;
+  readonly #onEventPersistence?: (event: PrpEvent, startedAtMs: number, endedAtMs: number) => Promise<void>;
   readonly #onCommittedEvent?: (event: PrpEvent) => Promise<void>;
   readonly #onDuplicateEvent?: (event: PrpEvent) => Promise<void>;
 
@@ -99,6 +100,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       assertControllerActive?: () => void;
       /** Read-only admission may finish an existing startup solely for restart detachment. */
       assertRunAdmissionActive?: () => void;
+      onEventPersistence?: (event: PrpEvent, startedAtMs: number, endedAtMs: number) => Promise<void>;
       onCommittedEvent?: (event: PrpEvent) => Promise<void>;
       onDuplicateEvent?: (event: PrpEvent) => Promise<void>;
     } = {},
@@ -109,6 +111,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
     this.#identityRedactor = createAgentIdentityRedactor(options.privateKeyPem);
     this.#binding = structuredClone(binding);
     this.#onCommittedEvent = options.onCommittedEvent;
+    this.#onEventPersistence = options.onEventPersistence;
     this.#onDuplicateEvent = options.onDuplicateEvent;
   }
 
@@ -217,6 +220,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
   }
 
   async appendEvent(value: NativeRunEvent | PrpEvent, options?: { signal: AbortSignal }) {
+    const persistenceStartedAt = Date.now(), persistenceClock = performance.now();
     this.#assertActive(options);
     if (!isPrpEvent(value)) throw new Error("native_legacy_event_not_supported");
     const validated = validatePrpEvent(value);
@@ -287,6 +291,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       return receipt;
     });
     this.#assertActive(options);
+    try { await this.#onEventPersistence?.(event, persistenceStartedAt, persistenceStartedAt + performance.now() - persistenceClock); } catch {}
     if (persisted.disposition === "committed") {
       try {
         publishLiveEvent({

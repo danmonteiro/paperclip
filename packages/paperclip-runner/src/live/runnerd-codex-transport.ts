@@ -1315,6 +1315,9 @@ export interface CapabilityRunnerdCodexTransportOptions extends RunnerExecutionD
   closeGraceMs?: number;
   /** Bounded provider turn-admission wait; defaults to 30 seconds. */
   turnStartTimeoutMs?: number;
+  /** Controller-owned opt-in operation timing. No exporter lives in Runner. */
+  measureOperation?<T>(phase: string, work: () => Promise<T>, attributes?: Record<string, number | boolean>): Promise<T>;
+  recordTimingReceipt?(receipt: unknown): void;
   onDiagnostic?: (message: string) => void;
   onEvidence?: (evidence: Readonly<CapabilityRunnerdProcessEvidence>) => void;
   /** Persist process ownership immediately after spawn, before waiting for
@@ -4142,6 +4145,18 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     itemId: string;
     currentRunGrant?: NativeRunRuntimeGrant;
   }): Promise<void> {
+    const previous = record(this.#runAttachTemplate?.provider).runtimeContext;
+    const current = input.currentRunGrant?.runtimeContext;
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.attach", () => this.#attachRunWork(input),
+      previous === undefined ? undefined : {contextReused:current === undefined || commandDigest(current) === commandDigest(previous)}) : this.#attachRunWork(input);
+  }
+
+  async #attachRunWork(input: {
+    runId: string;
+    turnId: string;
+    itemId: string;
+    currentRunGrant?: NativeRunRuntimeGrant;
+  }): Promise<void> {
     if (this.#pendingWarmRecoveryCompletion !== null) {
       throw new Error("native_runner_warm_transition_completion_pending");
     }
@@ -4283,7 +4298,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       }
       throw failure;
     }
-  }
+
+    }
 
   async resolveRuntimeRequest(input: {
     requestId: string;
@@ -4898,6 +4914,13 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     params: Record<string, unknown>, identity: DurableRecoveryIdentity,
     dynamicTools: Record<string, unknown>[],
   ) {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.prepare", () => this.#prepareLaunchWork(params, identity, dynamicTools), {toolCount:dynamicTools.length, toolSchemaBytes:Buffer.byteLength(JSON.stringify(dynamicTools))}) : this.#prepareLaunchWork(params, identity, dynamicTools);
+  }
+
+  async #prepareLaunchWork(
+    params: Record<string, unknown>, identity: DurableRecoveryIdentity,
+    dynamicTools: Record<string, unknown>[],
+  ) {
     if (this.options.prepareLaunch) {
       const provider = this.options.provider ?? "codex";
       this.#authorizedTools = authorizedToolSetForProvider(provider, dynamicTools);
@@ -5086,9 +5109,16 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         this.options.environment,
       ),
     };
-  }
+
+    }
 
   async #start(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.cold_start", () => this.#startWork(params)) : this.#startWork(params);
+  }
+
+  async #startWork(
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     if (this.#core !== null)
@@ -5220,7 +5250,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     this.#startupComplete = true;
     this.#diagnostic("runnerd authenticated to the durable PRP control plane");
     return this.#openedThreadResponse(params);
-  }
+
+    }
 
   #openedThreadResponse(params: Record<string, unknown>): Record<string, unknown> {
     const provider = this.options.provider ?? "codex";
@@ -5241,6 +5272,10 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   }
 
   async #resume(): Promise<void> {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.resume", () => this.#resumeWork()) : this.#resumeWork();
+  }
+
+  async #resumeWork(): Promise<void> {
     const desiredIdentity = this.options.prpIdentity;
     if (desiredIdentity === undefined) {
       throw new Error("PRP provider resume state is unavailable");
@@ -6018,7 +6053,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         : "runnerd restored its durable PRP session and provider thread",
     );
     this.#recoverPendingSemanticInputsWhenReady();
-  }
+
+    }
 
   async #recoverSemanticToolInput(call: Parameters<NonNullable<DurablePrpControlPlaneOptions["onSemanticToolInput"]>>[0]) {
     if (call.operationId === "paperclip_finish" || call.operationId === "paperclip_block") {
@@ -6134,6 +6170,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   async #startTurn(
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.turn_start", () => this.#startTurnWork(params), {inputBytes:Buffer.byteLength(JSON.stringify(params)), tokenDataAvailable:false}) : this.#startTurnWork(params);
+  }
+
+  async #startTurnWork(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const turnStartTimeoutMs = this.options.turnStartTimeoutMs ?? 30_000;
     if (!Number.isSafeInteger(turnStartTimeoutMs) || turnStartTimeoutMs <= 0) {
       throw new Error("turnStartTimeoutMs must be a positive safe integer");
@@ -6181,10 +6223,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       // it as its provider request identity, so a same-run recovery turn cannot
       // alias an already-settled request from the retained provider session.
       // Codex and OpenCode continue to return their provider-assigned identity.
+      const commandStarted = this.options.recordTimingReceipt ? performance.now() : 0;
       const startResult = await this.#commandResult(
         "turn.start",
         {
           text: message,
+          ...(this.options.recordTimingReceipt ? {performance:true} : {}),
           ...((this.options.provider ?? "codex") === "codex" && params.effort !== undefined ? { effort: params.effort } : {}),
           ...(reasoningMode === undefined ? {} : { reasoningMode }),
           ...(skills.length ? { skills } : {}),
@@ -6192,6 +6236,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         },
         commandDeadline,
       );
+      try { this.options.recordTimingReceipt?.({...record(startResult.timing), roundTripMs:performance.now()-commandStarted}); } catch {}
       const expectedProviderTurnId =
         typeof startResult.providerTurnId === "string" &&
         startResult.providerTurnId.length > 0
@@ -6235,6 +6280,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           expectedProviderTurnId,
           boundTurnId: this.#turnId,
         });
+      const waitForStarted = async () => {
       while (!providerTurnStarted() && Date.now() < deadline) {
         this.#throwIfFailed();
         this.#pumpEvents();
@@ -6245,6 +6291,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       }
       if (!providerTurnStarted())
         throw new Error("runnerd did not report the provider turn identity");
+      };
+      if (this.options.measureOperation) await this.options.measureOperation("runner.transport.started_event", waitForStarted);
+      else await waitForStarted();
       responseReady = true;
       return { turn: { id: this.#turnId, status: "inProgress" } };
     } finally {
@@ -6271,7 +6320,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         release.unref();
       }
     }
-  }
+
+    }
 
   async #command(
     type: string,
@@ -6380,6 +6430,13 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     expectedEventType?: "harness.ready" | "session.started" | "session.resumed",
     deadline = Date.now() + 30_000,
   ): Promise<void> {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.provider_identity", () => this.#waitForProviderIdentityWork(expectedEventType, deadline)) : this.#waitForProviderIdentityWork(expectedEventType, deadline);
+  }
+
+  async #waitForProviderIdentityWork(
+    expectedEventType?: "harness.ready" | "session.started" | "session.resumed",
+    deadline = Date.now() + 30_000,
+  ): Promise<void> {
     while (Date.now() < deadline) {
       this.#throwIfFailed();
       if (this.#closed) throw new Error("runnerd transport closed during provider startup");
@@ -6398,9 +6455,19 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       await new Promise((resolveWait) => setTimeout(resolveWait, 10));
     }
     throw new Error("runnerd did not report its provider identity");
-  }
+
+    }
 
   async #waitCommand(
+    type: string,
+    commandId?: string,
+    deadline = Date.now() + 30_000,
+    abortOnClose = false,
+  ): Promise<void> {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.command_ack", () => this.#waitCommandWork(type, commandId, deadline, abortOnClose)) : this.#waitCommandWork(type, commandId, deadline, abortOnClose);
+  }
+
+  async #waitCommandWork(
     type: string,
     commandId?: string,
     deadline = Date.now() + 30_000,
@@ -6418,7 +6485,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       runnerHasExited: () => this.#runnerHasExited(),
       failureCode: () => this.#startupComplete ? "provider_transport_failed" : this.#startupFailureCode,
     });
-  }
+
+    }
 
 
   #pumpEvents(): void {
@@ -7292,6 +7360,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   async #awaitRegistrationReady(
     ready: (() => Promise<void>) | undefined,
   ): Promise<void> {
+    return this.options.measureOperation ? this.options.measureOperation("runner.transport.registration", () => this.#awaitRegistrationReadyWork(ready)) : this.#awaitRegistrationReadyWork(ready);
+  }
+
+  async #awaitRegistrationReadyWork(
+    ready: (() => Promise<void>) | undefined,
+  ): Promise<void> {
     this.#assertStartupOpen();
     if (ready === undefined) {
       this.#throwIfFailed();
@@ -7303,7 +7377,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     ]);
     this.#assertStartupOpen();
     this.#throwIfFailed();
-  }
+
+    }
 
   #diagnostic(message: string): void {
     message = redactObservabilityDiagnostic(message, this.options.environment, this.options.observability?.otelConfig);

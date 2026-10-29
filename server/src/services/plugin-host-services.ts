@@ -537,6 +537,10 @@ const KNOWN_PROVIDER_SPAN_NAMES: ReadonlySet<string> = new Set([
   "postUploadCommand",
   "session.open",
   "session.close",
+  "plugin.worker", "plugin.host.identity.read", "plugin.host.config.read", "plugin.host.progress.read", "plugin.host.progress.write",
+  "plugin.workspace.prepare", "plugin.storage.queue", "plugin.storage.execute",
+  "plugin.runtime.queue", "plugin.runtime.prepare", "plugin.runtime.reconcile", "plugin.runtime.verify",
+  "plugin.launcher.request", "plugin.remote.operation",
 ]);
 
 /** Clamp the span name to a closed, namespaced set. A known name maps to
@@ -547,7 +551,7 @@ const KNOWN_PROVIDER_SPAN_NAMES: ReadonlySet<string> = new Set([
  * `provider` family attribute on the span instead of this literal. */
 function clampProviderSpanName(raw: unknown): string {
   const name = typeof raw === "string" && KNOWN_PROVIDER_SPAN_NAMES.has(raw) ? raw : "other";
-  return `sandbox.daytona.${name}`;
+  return name.startsWith("plugin.") ? name : `sandbox.daytona.${name}`;
 }
 
 /** The closed allowlist of attribute keys a provider span may carry. The host
@@ -560,6 +564,7 @@ const PROVIDER_SPAN_ATTR_ALLOWLIST: ReadonlySet<string> = new Set<string>([
   SPAN_ATTRS.transferWallMs,
   SPAN_ATTRS.transferGuardCount,
   SPAN_ATTRS.transferDirection,
+  "plugin.operation", "plugin.reused", "plugin.item_count", "plugin.bytes", "plugin.call_count",
 ]);
 
 /** The subset of allowed keys that carry a finite number. */
@@ -567,6 +572,7 @@ const PROVIDER_SPAN_NUMERIC_ATTRS: ReadonlySet<string> = new Set<string>([
   SPAN_ATTRS.packWallMs,
   SPAN_ATTRS.transferWallMs,
   SPAN_ATTRS.transferGuardCount,
+  "plugin.item_count", "plugin.bytes", "plugin.call_count",
 ]);
 
 /** The closed value set for the `outcome` attribute. */
@@ -589,6 +595,11 @@ export function clampProviderSpanAttributes(
   if (!raw) return clamped;
   for (const [key, value] of Object.entries(raw)) {
     if (!PROVIDER_SPAN_ATTR_ALLOWLIST.has(key)) continue;
+    if (key === "plugin.operation") {
+      if (typeof value === "string" && ["request", "queue.wait", "mount.refresh", "guest.setup", "process.execute", "script.workspace", "script.git", "script.settings", "script.publication", "cleanup", "process.start", "hello", "checkpoint.load"].includes(value)) clamped[key] = value;
+      continue;
+    }
+    if (key === "plugin.reused") { if (typeof value === "boolean") clamped[key] = value; continue; }
     if (key === SPAN_ATTRS.provider) {
       clamped[key] = normalizeProviderFamily(typeof value === "string" ? value : undefined);
       continue;
@@ -602,7 +613,7 @@ export function clampProviderSpanAttributes(
       continue;
     }
     if (PROVIDER_SPAN_NUMERIC_ATTRS.has(key)) {
-      if (typeof value === "number" && Number.isFinite(value)) clamped[key] = value;
+      if (typeof value === "number" && Number.isFinite(value) && (!key.startsWith("plugin.") || value >= 0 && value <= 1e12)) clamped[key] = value;
       continue;
     }
   }
@@ -691,20 +702,30 @@ export function recordWorkerProviderSpan(
     status?: { code?: unknown; message?: unknown };
     startTimeMs?: unknown;
     endTimeMs?: unknown;
+    children?: unknown;
   },
   context: WorkerHostCallContext | undefined,
 ): void {
   const parent = parseTraceparent(context?.traceparent);
   if (!parent) return; // reject a missing or malformed traceparent
-  const times = validateProviderSpanTimes(params.startTimeMs, params.endTimeMs);
-  const status = clampSpanStatus(params.status);
-  recordProviderPluginSpan({
-    name: clampProviderSpanName(params.name),
-    parent,
-    attributes: clampProviderSpanAttributes(params.attributes),
-    ...(status ? { status } : {}),
-    ...(times ? { startTimeMs: times.startTimeMs, endTimeMs: times.endTimeMs } : {}),
-  });
+  let remaining = 256;
+  const visit = (params: { name: string; attributes?: Record<string, unknown>; status?: { code?: unknown }; startTimeMs?: unknown; endTimeMs?: unknown; children?: unknown }, parent: ParsedTraceparent, depth: number, enclosing?: { startTimeMs: number; endTimeMs: number }) => {
+    if (depth > 12 || remaining-- <= 0) return;
+    const times = validateProviderSpanTimes(params.startTimeMs, params.endTimeMs);
+    if (enclosing && (!times || times.startTimeMs < enclosing.startTimeMs || times.endTimeMs > enclosing.endTimeMs)) return;
+    const status = clampSpanStatus(params.status);
+    const childParent = recordProviderPluginSpan({
+      name: clampProviderSpanName(params.name),
+      parent,
+      attributes: clampProviderSpanAttributes(params.attributes),
+      ...(status ? { status } : {}),
+      ...(times ? { startTimeMs: times.startTimeMs, endTimeMs: times.endTimeMs } : {}),
+    });
+    if (childParent && times && Array.isArray(params.children)) for (const child of params.children.slice(0, 256)) {
+      if (child && typeof child === "object" && typeof child.name === "string") visit(child, childParent, depth + 1, times);
+    }
+  };
+  try { visit(params, parent, 0); } catch {}
 }
 
 export function buildHostServices(

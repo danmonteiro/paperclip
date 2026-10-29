@@ -6,6 +6,7 @@ import {
   buildHostServices,
   clampProviderSpanAttributes,
   parseTraceparent,
+  recordWorkerProviderSpan,
 } from "../services/plugin-host-services.js";
 
 // Capture every span the host trust boundary hands to the real tracer.
@@ -328,4 +329,26 @@ describe("clampProviderSpanAttributes", () => {
     expect(clampProviderSpanAttributes({ [A.transferDirection]: "" })).toEqual({});
     expect(clampProviderSpanAttributes({ [A.transferDirection]: 1 })).toEqual({});
   });
+});
+
+describe("nested worker timing receipts",()=>{
+ it("uses host-generated parents, clamps content and bounds child clocks",()=>{
+  mockRecordSpan.mockReset();
+  const childParent={traceId:"0af7651916cd43dd8448eb211c80319c",spanId:"1111111111111111",traceFlags:1};
+  mockRecordSpan.mockReturnValue(childParent);
+  const now=Date.now();
+  recordWorkerProviderSpan({name:"plugin.worker",startTimeMs:now-100,endTimeMs:now,children:[
+   {name:"plugin.remote.operation",startTimeMs:now-90,endTimeMs:now-10,attributes:{"plugin.operation":"script.settings",secret:"private"}},
+   {name:"plugin.runtime.verify",startTimeMs:now-200,endTimeMs:now},
+  ]},{traceparent:VALID_TRACEPARENT} as WorkerHostCallContext);
+  expect(mockRecordSpan).toHaveBeenCalledTimes(2);
+  expect(mockRecordSpan.mock.calls[1][0]).toMatchObject({parent:childParent,attributes:{"plugin.operation":"script.settings"}});
+  expect(JSON.stringify(mockRecordSpan.mock.calls)).not.toContain("private");
+ });
+});
+
+it("allows a workspace provider timing receipt without environment-driver authority",async()=>{
+ mockRecordSpan.mockReset();
+ await handlersFor(["workspaces.manage"])["span.record"]({name:"plugin.worker"},{traceparent:VALID_TRACEPARENT} as WorkerHostCallContext);
+ expect(mockRecordSpan).toHaveBeenCalledTimes(1);
 });

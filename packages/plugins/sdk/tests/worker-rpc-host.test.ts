@@ -666,7 +666,8 @@ describe("worker provider tracer", () => {
     expect(spanRecords).toHaveLength(1);
     const record = spanRecords[0]!;
     expect(record.invocationId).toBe("invocation-a");
-    expect(record.params).toMatchObject({
+    expect(record.params).toMatchObject({name:"plugin.worker"});
+    expect((record.params as {children:unknown[]}).children[0]).toMatchObject({
       name: "pack",
       attributes: {
         "paperclip.sandbox.startup.pack.wall_ms": 12,

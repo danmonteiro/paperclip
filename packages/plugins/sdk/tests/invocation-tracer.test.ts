@@ -1,0 +1,41 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { describe, expect, it } from "vitest";
+import { createInvocationTracer } from "../src/invocation-tracer.js";
+import type { PluginSpanRecord } from "../src/protocol.js";
+
+describe("invocation timing receipts",()=>{
+ it("keeps concurrent roots and nested failures separate",async()=>{
+  const records:PluginSpanRecord[]=[];
+  const tracer=createInvocationTracer(()=>true,span=>records.push(span));
+  let release!:()=>void;
+  const waiting=new Promise<void>(resolve=>release=resolve);
+  const first=tracer.withSpan("first",async()=>{await waiting;return tracer.withSpan("child",async()=>42);});
+  const error=new Error("private");
+  await expect(tracer.withSpan("second",()=>tracer.withSpan("failed",async()=>{throw error;}))).rejects.toBe(error);
+  release();expect(await first).toBe(42);
+  expect(records.map(span=>span.name)).toEqual(["second","first"]);
+  expect(records[0].children?.[0].status).toEqual({code:2});
+  expect(records[1].children?.[0].name).toBe("child");
+  for(const span of records) expect(span.endTimeMs!).toBeGreaterThanOrEqual(span.startTimeMs!);
+  expect(JSON.stringify(records)).not.toContain("private");
+ });
+ it("is inert without an invocation trace and isolates recording failures",async()=>{
+  const records:PluginSpanRecord[]=[];
+  let count=0;
+  const disabled=createInvocationTracer(()=>false,span=>records.push(span));
+  expect(await disabled.withSpan("disabled",async()=>++count)).toBe(1);
+  expect(records).toEqual([]);
+  const broken=createInvocationTracer(()=>true,()=>{throw Error("export");});
+  expect(await broken.withSpan("broken",async()=>++count)).toBe(2);
+ });
+ it("bounds children and excludes detached work after its parent closes",async()=>{
+  const records:PluginSpanRecord[]=[];const tracer=createInvocationTracer(()=>true,span=>records.push(span));
+  let detached!:()=>Promise<void>;
+  await tracer.withSpan("root",async()=>{
+   for(let n=0;n<300;n++)await tracer.withSpan("child",async()=>{});
+   detached=AsyncLocalStorage.bind(()=>tracer.withSpan("late",async()=>{}));
+  });
+  expect(records[0].children).toHaveLength(255);
+  await detached();expect(records).toHaveLength(1);
+ });
+});
