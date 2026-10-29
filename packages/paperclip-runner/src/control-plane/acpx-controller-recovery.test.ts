@@ -67,7 +67,7 @@ function sidecarSource(root: string, selectedProfile = profile, agent = "claude"
   ].join("\n");
 }
 
-async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidateStartupAdmission) {
+async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidateStartupAdmission, beforeLaunchDelayMs = 0) {
   const root = mkdtempSync(resolve(tmpdir(), "acpx-controller-recovery-"));
   const { executable: nodeCommand } = await copyOwnedNodeRuntime(resolve(root, "node"));
   const stateDirectory = resolve(root, "control-plane");
@@ -93,8 +93,12 @@ async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidat
   let controller = create();
   await controller.start();
   const port = Number(new URL(controller.connectUrl).port);
-  const ticket = controller.issueBootstrapTicket();
+  // Establish one absolute fixture grant before issuing its one-use ticket.
+  // Bootstrap preparation and the actual daemon share this deadline.
+  const deadlineAt = candidateAdmission?.expiresAt ?? (maxLifetimeMs === undefined ? undefined : Date.now() + maxLifetimeMs);
+  const ticket = controller.issueBootstrapTicket(deadlineAt === undefined ? 5_000 : deadlineAt - Date.now());
   await controller.flushCheckpoint();
+  if (beforeLaunchDelayMs) await new Promise(resolveDelay => setTimeout(resolveDelay, beforeLaunchDelayMs));
   let diagnostics = "";
   const args = ["--connect-url",controller.connectUrl,"--state-dir",resolve(root,"runner"),
     "--runner-id",identity.runnerInstanceId,"--environment-lease-id",identity.environmentLeaseId,
@@ -109,7 +113,7 @@ async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidat
   const bounded = maxLifetimeMs === undefined ? undefined : spawnRunner({
     connectUrl: controller.connectUrl, stateDirectory: resolve(root, "runner"), identity, ticket,
     maxOutboxBytes: 16 * 1024 * 1024, p0ReserveBytes: 1024 * 1024,
-    maxRuntimeMs: 0, maxLifetimeMs, reconnectGraceMs: 15_000,
+    maxRuntimeMs: 0, maxLifetimeMs: deadlineAt! - Date.now(), reconnectGraceMs: 15_000,
     runnerBinaryPath: binary, runnerVersion: expectedRunnerVersion, runnerDigest: expectedRunnerDigest,
     acpxLaunchProfile: { ...(candidateAdmission ? { candidateAdmission } : {}), authorityDigest: `sha256:${"d".repeat(64)}`, command: nodeCommand, commandSha256: digest(nodeCommand),
       sidecarScript: script, sidecarScriptSha256: digest(script) },
@@ -123,11 +127,20 @@ async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidat
   async function command(type:string,payload:Record<string,unknown>={}) {
     const id="command-"+(++commandNumber);
     controller.queueCommand(type,payload,id,true);
-    await vi.waitFor(()=>{
-      expect(child.exitCode,"runner exit; "+diagnostics).toBeNull();
-      expect(child.signalCode,"runner signal; "+diagnostics).toBeNull();
-      expect(["completed","failed"]).toContain(controller.getCommand(id)?.status);
-    },{timeout:8000});
+    try {
+      await vi.waitFor(()=>{
+        expect(child.exitCode,"runner exit; "+diagnostics).toBeNull();
+        expect(child.signalCode,"runner signal; "+diagnostics).toBeNull();
+        expect(["completed","failed"]).toContain(controller.getCommand(id)?.status);
+      },{timeout:8000});
+    } catch (error) {
+      let runnerDiagnostics: unknown;
+      try { runnerDiagnostics = JSON.parse(readFileSync(resolve(root, "runner/runner-state.json"), "utf8")).diagnostics?.slice(-8); } catch { /* Startup may not have created state. */ }
+      throw new Error("Hermetic Runner command did not settle: " + JSON.stringify({ id, type,
+        authenticatedConnections: controller.activeRunnerConnectionCount(), command: controller.getCommand(id),
+        remainingLifetimeMs: deadlineAt === undefined ? null : deadlineAt - Date.now(),
+        exitCode: child.exitCode, signalCode: child.signalCode, stderr: diagnostics, runnerDiagnostics }).slice(-8192), { cause: error });
+    }
     return controller.getCommand(id)!;
   }
   const ready = async () => {
@@ -143,7 +156,7 @@ async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidat
     rmSync(stateDirectory,{recursive:true,force:true});
     decodeDurablePrpCheckpoint(checkpoint.records).restoreSessionDirectory(root);
   };
-  return {root,child,exit,command,ready,startedAt,processGroupId: bounded?.processGroupId ?? child.pid,
+  return {root,child,exit,command,ready,startedAt,deadlineAt,processGroupId: bounded?.processGroupId ?? child.pid,
     controller:()=>controller,
     stopController:stopped,
     restoreCheckpoint,
@@ -187,8 +200,10 @@ async function assertActiveExpiry(candidate = false) {
     agent: "antigravity", model: "gemini-3.8-flash-low", profileDigest: profiles.profiles.antigravity.commandDigest,
     nativeClosureDigest: `sha256:${ANTIGRAVITY_DISTRIBUTION_PINS["darwin-arm64"].closureSha256}`,
     platform: "darwin", architecture: "arm64", expiresAt: Date.now() + lifetimeMs }, identity) : undefined;
-  const run = await fixture(candidate ? undefined : lifetimeMs, candidateAdmission);
-  const deadlineAt = candidateAdmission?.expiresAt ?? Date.parse(run.startedAt) + lifetimeMs;
+  // A controlled cold start outlasts the default five-second bootstrap ticket.
+  // It must still activate inside the original fifteen-second absolute grant.
+  const run = await fixture(candidate ? undefined : lifetimeMs, candidateAdmission, candidate ? 0 : 6_000);
+  const deadlineAt = run.deadlineAt!;
   try {
     await run.ready();
     expect(await run.command("turn.start", { turnId: "provider-expiring-turn", text: "Keep this hermetic turn active" })).toMatchObject({ status: "completed" });
@@ -213,7 +228,7 @@ async function assertActiveExpiry(candidate = false) {
   } finally { await run.cleanup(); }
 }
 
-it("expires an active provider turn at the launch lifetime and physically retires its owned processes", () => assertActiveExpiry(), 30_000);
+it("expires an active provider turn after a cold bootstrap delay and physically retires its owned processes", () => assertActiveExpiry(), 30_000);
 it.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
   "retires an active exact Antigravity candidate at absolute operator expiry with no caller runtime limit",
   () => assertActiveExpiry(true), 30_000);
