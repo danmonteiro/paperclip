@@ -1,0 +1,67 @@
+import { mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { ANTIGRAVITY_AUTH_ENV, stageManagedAntigravityCredential } from "./antigravity-credentials.js";
+import { ACPX_CREDENTIAL_BINDING_ENV, createAcpxCredentialBinding, createAcpxSidecarHostEnvironment, createSanitizedAcpxSpawnInput } from "./environment.js";
+
+const roots: string[] = [];
+const credential = JSON.stringify({ client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+  client_secret: "fixture-client", refresh_token: "fixture-refresh", token_uri: "https://oauth2.googleapis.com/token",
+  scopes: ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/aicode"] });
+async function home() { const value = await realpath(await mkdtemp(join(tmpdir(), "antigravity-credential-test-"))); roots.push(value); return value; }
+afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+
+it.each([{}, { [ANTIGRAVITY_AUTH_ENV]: "{}" }, { [ANTIGRAVITY_AUTH_ENV]: credential, GEMINI_API_KEY: "fixture-key" }])("rejects absent, malformed or ambiguous credentials", async environment => {
+  await expect(stageManagedAntigravityCredential({ agentHomeDirectory: await home(), environment })).rejects.toThrow(/credential/);
+});
+
+it("keeps OAuth bound to its sidecar session and out of the actual native environment", () => {
+  const source = { [ANTIGRAVITY_AUTH_ENV]: credential };
+  const env = { ...source, [ACPX_CREDENTIAL_BINDING_ENV]: createAcpxCredentialBinding(source, "antigravity", "one") };
+  expect(createAcpxSidecarHostEnvironment(env, "antigravity", "one")[ANTIGRAVITY_AUTH_ENV]).toBe(credential);
+  expect(() => createAcpxSidecarHostEnvironment(env, "antigravity", "other")).toThrow(/binding/);
+  expect(() => createAcpxSidecarHostEnvironment(source, "antigravity", "one")).toThrow(/binding/);
+  expect(createSanitizedAcpxSpawnInput(source, "antigravity").env[ANTIGRAVITY_AUTH_ENV]).toBeUndefined();
+  vi.stubEnv(ANTIGRAVITY_AUTH_ENV, credential);
+  expect(createSanitizedAcpxSpawnInput(undefined, "antigravity").env[ANTIGRAVITY_AUTH_ENV]).toBeUndefined();
+});
+
+it("fences refresh owners, preserves native rotation, scrubs live files and removes stale handoffs on reuse", async () => {
+  const root = await home(), directory = join(root, "antigravity-acp");
+  const input = { agentHomeDirectory: root, environment: { [ANTIGRAVITY_AUTH_ENV]: credential } };
+  const first = await stageManagedAntigravityCredential(input);
+  try {
+    expect((await stat(join(directory, "acp_token.json"))).mode & 0o777).toBe(0o600);
+    await expect(stageManagedAntigravityCredential(input)).rejects.toThrow(/active lease|owned/);
+    const rotated = credential.replace("fixture-refresh", "rotated-refresh");
+    await writeFile(join(directory, "acp_token.json"), rotated, { mode: 0o600 });
+    await Promise.all([first.close(), first.close()]);
+    expect(await readFile(join(directory, "auth-refresh.json"), "utf8")).toBe(rotated);
+    for (const name of ["auth.json", "acp_token.json"]) await expect(stat(join(directory, name))).rejects.toMatchObject({ code: "ENOENT" });
+    const second = await stageManagedAntigravityCredential(input);
+    try { await expect(stat(join(directory, "auth-refresh.json"))).rejects.toMatchObject({ code: "ENOENT" }); }
+    finally { await second.close(); }
+  } finally { await first.close(); }
+});
+
+it("retains ownership when a token is replaced by a symlink, and never reads its target", async () => {
+  const root = await home(), token = join(root, "antigravity-acp", "acp_token.json");
+  const input = { agentHomeDirectory: root, environment: { [ANTIGRAVITY_AUTH_ENV]: credential } };
+  const lease = await stageManagedAntigravityCredential(input), target = join(await home(), "unrelated");
+  await writeFile(target, "unrelated", { mode: 0o600 });
+  await rm(token); await symlink(target, token);
+  await expect(lease.close()).rejects.toThrow();
+  await expect(stageManagedAntigravityCredential(input)).rejects.toThrow(/active lease|owned/);
+  expect(await readFile(target, "utf8")).toBe("unrelated");
+  await rm(token); await writeFile(token, credential, { mode: 0o600 }); await lease.close();
+});
+
+it("leaves no OAuth handoff after failed admission or an API-key session", async () => {
+  for (const environment of [{ [ANTIGRAVITY_AUTH_ENV]: credential }, { GEMINI_API_KEY: "fixture-key" }]) {
+    const root = await home();
+    const lease = await stageManagedAntigravityCredential({ agentHomeDirectory: root, environment, retainRefresh: () => false });
+    await lease.close();
+    for (const name of ["auth.json", "acp_token.json", "auth-refresh.json"]) await expect(stat(join(root, "antigravity-acp", name))).rejects.toMatchObject({ code: "ENOENT" });
+  }
+});

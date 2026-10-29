@@ -3914,6 +3914,7 @@ const runnerExplicitProviderEnvironmentKeys = [
   "CODEX_API_KEY",
   "PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET",
   "PAPERCLIP_ACPX_GROK_AUTH_JSON_SECRET",
+  "PAPERCLIP_ACPX_ANTIGRAVITY_AUTH_JSON_SECRET",
   "XAI_API_KEY",
   "AWS_REGION",
   "AWS_DEFAULT_REGION",
@@ -4016,6 +4017,7 @@ export function spawnRunner(options: {
   runnerVersion: string;
   runnerDigest: string;
   acpxLaunchProfile?: {
+    candidateAdmission?: import("../drivers/acpx/candidate-admission.js").AcpxCandidateStartupAdmission;
     authorityDigest: string;
     command: string;
     commandSha256: string;
@@ -4091,6 +4093,7 @@ export function spawnRunner(options: {
           options.acpxLaunchProfile.sidecarScript,
           "--acpx-sidecar-script-sha256",
           options.acpxLaunchProfile.sidecarScriptSha256,
+          ...(options.acpxLaunchProfile.candidateAdmission ? ["--acpx-candidate-admission-json", JSON.stringify(options.acpxLaunchProfile.candidateAdmission)] : []),
         ]
       : []),
     ...(options.opencodeLaunchProfile
