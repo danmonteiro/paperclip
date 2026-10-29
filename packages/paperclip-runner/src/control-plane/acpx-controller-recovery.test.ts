@@ -193,15 +193,17 @@ async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidat
 }
 
 async function assertActiveExpiry(candidate = false) {
-  // Cold CI can spend three seconds reaching prepare. Keep a finite launch
-  // grant that includes setup, and never renew it after the active witness.
-  const lifetimeMs = 15_000;
+  // One fixed grant covers the six-second cold delay, four existing eight-
+  // second command budgets, and seven seconds of active-turn headroom. Loaded
+  // CI exhausted the earlier fifteen-second grant before session.open settled.
+  // Never renew this authority after setup or the active-turn witness.
+  const lifetimeMs = 45_000;
   const candidateAdmission = candidate ? bindAcpxCandidateAdmission({ schema: "paperclip.acpx-candidate-admission.v1", companyId: "company-expiry",
     agent: "antigravity", model: "gemini-3.8-flash-low", profileDigest: profiles.profiles.antigravity.commandDigest,
     nativeClosureDigest: `sha256:${ANTIGRAVITY_DISTRIBUTION_PINS["darwin-arm64"].closureSha256}`,
     platform: "darwin", architecture: "arm64", expiresAt: Date.now() + lifetimeMs }, identity) : undefined;
   // A controlled cold start outlasts the default five-second bootstrap ticket.
-  // It must still activate inside the original fifteen-second absolute grant.
+  // It must still activate inside the original fixed absolute grant.
   const run = await fixture(candidate ? undefined : lifetimeMs, candidateAdmission, candidate ? 0 : 6_000);
   const deadlineAt = run.deadlineAt!;
   try {
@@ -228,10 +230,10 @@ async function assertActiveExpiry(candidate = false) {
   } finally { await run.cleanup(); }
 }
 
-it("expires an active provider turn after a cold bootstrap delay and physically retires its owned processes", () => assertActiveExpiry(), 30_000);
+it("expires an active provider turn after a cold bootstrap delay and physically retires its owned processes", () => assertActiveExpiry(), 60_000);
 it.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
   "retires an active exact Antigravity candidate at absolute operator expiry with no caller runtime limit",
-  () => assertActiveExpiry(true), 30_000);
+  () => assertActiveExpiry(true), 60_000);
 
 it("keeps the original native ACPX process and active turn through controller replacement",async()=>{
   const run=await fixture();
