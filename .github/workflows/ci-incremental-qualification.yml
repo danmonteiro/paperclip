@@ -49,14 +49,16 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           import { execFileSync } from 'node:child_process';
+          import assert from 'node:assert/strict';
           import { executionPlan } from './scripts/ci/execution-plan.mjs';
           const config = JSON.parse(readFileSync('turbo.json', 'utf8'));
           for (const task of ['ci:server', 'ci:db', 'ci:runner-rust']) {
             const plan = executionPlan(config, task, []);
             const file = process.env.RUNNER_TEMP + '/ci-task-config.json';
             writeFileSync(file, JSON.stringify(plan.config));
-            execFileSync(process.env.CI_TURBO_BIN, ['run', plan.target, '--root-turbo-json', file,
-              '--dry=json', '--cache-dir=.turbo/cache', '--', ...plan.args]);
+            const result = execFileSync(process.env.CI_TURBO_BIN, ['run', plan.target, '--root-turbo-json', file,
+              '--dry=json', '--cache-dir=.turbo/cache', '--', ...plan.args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+            assert.ok(JSON.parse(result).tasks.some((task) => task.taskId === plan.target));
           }
           NODE
       - name: Explain this pull request's plan
