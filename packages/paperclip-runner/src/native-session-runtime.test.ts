@@ -33,6 +33,7 @@ import {
   executeNativeSession,
   completeTerminatedRemoteNativeSessionCleanup,
   completeTerminatedLocalNativeSessionCleanup,
+  retryQuarantinedNativeSessionCleanup,
   type ExecuteNativeSessionOptions,
 } from "./native-session-runtime.js";
 
@@ -4468,6 +4469,50 @@ describe("executeNativeSession recovery", () => {
     expect(backend.openSession).toHaveBeenCalledTimes(2);
     expect(completeTerminatedLocalNativeSessionCleanup({ companyId, runId: problemIdentity.runId,
       runnerInstanceId: "issue-isolation-runner" })).toBe(true);
+  });
+
+  it("lets an operator retry only the exact held cleanup without replaying the turn", async () => {
+    const scopedIdentity = { ...identity, companyId: "operator-cleanup-company", issueId: "operator-cleanup-issue",
+      runId: "operator-cleanup-run", sessionId: "operator-cleanup-session", agentId: "operator-cleanup-agent" };
+    const closeFailure = new NativeSessionCloseUnrecoverableError();
+    const capabilities = { resume: true, typedEvents: true, steering: false, interruption: false, structuredResult: true };
+    const session: NativeSession = {
+      identity: () => scopedIdentity, capabilities: async () => capabilities,
+      async *events() { throw new Error("provider transport failed"); },
+      startTurn: async () => ({ turnId: "operator-cleanup-turn" }), result: async () => null,
+      async snapshot() { return { backendKind: "mock", sessionId: scopedIdentity.sessionId, identity: scopedIdentity,
+        providerSessionId: "operator-cleanup-provider", cursor: null, activeTurnId: null, pendingRuntimeRequests: [], lineage: [] }; },
+      close: vi.fn(async ({ reason }: { reason: string }) => {
+        if (reason !== "operator requested exact native session cleanup retry") throw closeFailure;
+      }),
+    };
+    const backend: NativeSessionBackend = {
+      descriptor: async () => ({ kind: "mock", name: "operator-cleanup-backend", version: "1", capabilities }),
+      openSession: vi.fn(async () => session),
+    };
+    const controlPlane: ControlPlanePort = {
+      openRun: async () => {}, checkpointSession: async () => {},
+      appendEvent: async () => ({ cursor: 0, highestContiguousSourceSeq: 0, disposition: "committed" }),
+      replayEvents: async () => ({ events: [], highestContiguousSourceSeq: 0 }), completeRun: vi.fn(async () => {}),
+    };
+    const runnerInstanceId = "operator-cleanup-runner";
+    await expect(executeNativeSession({
+      input: { ...input, binding: { ...input.binding, companyId: scopedIdentity.companyId,
+        issueId: scopedIdentity.issueId, runId: scopedIdentity.runId, agentId: scopedIdentity.agentId },
+        session: { ...input.session, normalizedSessionId: scopedIdentity.sessionId } }, backend, controlPlane,
+      runnerInstanceId, controlPlaneInstanceId: "operator-cleanup-control", requireSessionCloseBeforeReturn: true,
+    })).rejects.toMatchObject({ cleanupError: closeFailure });
+    await vi.waitFor(() => expect(session.close).toHaveBeenCalledOnce());
+
+    const binding = { ...scopedIdentity, runnerInstanceId };
+    expect(await retryQuarantinedNativeSessionCleanup({ ...binding, issueId: "other-issue" })).toBe("not_found");
+    expect(await retryQuarantinedNativeSessionCleanup({ ...binding, runnerInstanceId: "other-runner" })).toBe("not_found");
+    expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("settled");
+    expect(session.close).toHaveBeenCalledTimes(2);
+    expect(session.close).toHaveBeenLastCalledWith({ reason: "operator requested exact native session cleanup retry" });
+    expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("not_found");
+    expect(backend.openSession).toHaveBeenCalledOnce();
+    expect(controlPlane.completeRun).not.toHaveBeenCalled();
   });
 
   it("retires local quarantine only for the stopped run and runner instance", async () => {

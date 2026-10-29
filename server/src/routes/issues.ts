@@ -107,6 +107,7 @@ import {
   resolveCreateIssueStatusDefault,
   resolveIssueRecoveryActionSchema,
   retryWorkspaceExportSchema,
+  retryNativeSessionCleanupSchema,
   recoverWorkspaceSchema,
   taskRetrySchema,
   resumeWorkspaceFinalizationSchema,
@@ -9767,6 +9768,27 @@ export function issueRoutes(
       actionId: req.body.actionId, runId: req.body.runId, repairNote: req.body.repairNote,
       actorId: getActorInfo(req).actorId, environmentRuntime });
     res.status(202).json(receipt);
+  });
+
+  router.post("/issues/:id/recovery-actions/retry-native-session-cleanup", validate(retryNativeSessionCleanupSchema), async (req, res) => {
+    assertBoard(req);
+    const issue = await getAccessibleResource(req, res, svc.getById(req.params.id as string), "Issue not found");
+    if (!issue || !(await assertIssueReadAllowed(req, res, issue))) return;
+    const decision = await access.decide({ actor: req.actor, action: "runtime:manage", resource: { type: "company", companyId: issue.companyId } });
+    if (!decision.allowed) throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
+    const { retryNativeSessionCleanupForRun } = await import("../services/native-runtime/native-session-executor.js");
+    const status = await retryNativeSessionCleanupForRun(db, {
+      companyId: issue.companyId,
+      issueId: issue.id,
+      runId: req.body.runId,
+    });
+    if (status !== "settled") {
+      throw conflict(`Native session cleanup retry was not completed (${status}). The task turn was not retried; inspect the exact run and process evidence before any further recovery.`);
+    }
+    logger.info({ companyId: issue.companyId, issueId: issue.id, runId: req.body.runId, actorId: getActorInfo(req).actorId },
+      "Operator settled exact quarantined native session cleanup");
+    res.json({ status: "settled", runId: req.body.runId, turnReplayed: false, taskRetried: false,
+      nextAction: "The cleanup hold is retired. Review the saved run, then use the Issue Retry action separately if its effects are reconciled." });
   });
 
   router.post("/issues/:id/recovery-actions/reconstruct-workspace", validate(reconstructWorkspaceSchema), async (req, res) => {

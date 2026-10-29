@@ -126,6 +126,7 @@ import {
   NativeSessionProtocolIntegrityError,
   completeRetainedNativeSessionCleanup,
   completeTerminatedLocalNativeSessionCleanup,
+  retryQuarantinedNativeSessionCleanup,
   acpxRuntimeSessionDirectoryName,
   OPENCODE_ISOLATED_HOMES_DIRECTORY,
   opencodeRuntimeSessionDirectoryName,
@@ -3078,6 +3079,38 @@ export async function reconcileRetainedNativeSessionCleanup(
     releaseRetainedNativeSessionCleanup(db, input);
   }
   return outcome;
+}
+
+/** One exact, operator-requested close retry; this never retries the task turn. */
+export async function retryNativeSessionCleanupForRun(
+  db: Db,
+  input: { companyId: string; issueId: string; runId: string },
+): Promise<"settled" | "not_found" | "not_operator_required" | "busy" | "still_incomplete" | "not_eligible"> {
+  const [run] = await db.select({
+    id: heartbeatRuns.id,
+    companyId: heartbeatRuns.companyId,
+    issueId: heartbeatRuns.nativeIssueId,
+    agentId: heartbeatRuns.agentId,
+    sessionId: heartbeatRuns.nativeSessionId,
+    runnerInstanceId: heartbeatRuns.runnerInstanceId,
+    runtimeMode: heartbeatRuns.runtimeMode,
+    status: heartbeatRuns.status,
+    finishedAt: heartbeatRuns.finishedAt,
+  }).from(heartbeatRuns).where(and(
+    eq(heartbeatRuns.id, input.runId),
+    eq(heartbeatRuns.companyId, input.companyId),
+    eq(heartbeatRuns.nativeIssueId, input.issueId),
+  )).limit(1);
+  if (!run || run.runtimeMode !== "native" || !["failed", "timed_out", "cancelled"].includes(run.status) ||
+      !run.finishedAt || !run.sessionId || !run.runnerInstanceId) return "not_eligible";
+  return retryQuarantinedNativeSessionCleanup({
+    companyId: run.companyId,
+    issueId: input.issueId,
+    runId: run.id,
+    sessionId: run.sessionId,
+    agentId: run.agentId,
+    runnerInstanceId: run.runnerInstanceId,
+  });
 }
 
 async function inspectRetainedNativeSessionCleanup(

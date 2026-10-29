@@ -134,6 +134,59 @@ export function completeRetainedNativeSessionCleanup(
   return matches.length;
 }
 
+export type NativeSessionCleanupRetryResult =
+  | "settled"
+  | "not_found"
+  | "not_operator_required"
+  | "busy"
+  | "still_incomplete";
+
+/** Retry one explicitly selected, operator-held cleanup. This only calls close
+ * on the exact retained session; it never opens a provider or replays a turn.
+ * A failed attempt remains quarantined and must still pass normal admission. */
+export async function retryQuarantinedNativeSessionCleanup(binding: {
+  companyId: string;
+  issueId: string;
+  runId: string;
+  sessionId: string;
+  agentId: string;
+  runnerInstanceId: string;
+}): Promise<NativeSessionCleanupRetryResult> {
+  const matches = [...quarantinedSessionCleanups].filter(({ session, domain }) => {
+    const identity = session.identity();
+    const parts = JSON.parse(domain) as string[];
+    return parts[0] === binding.companyId && parts[1] === binding.issueId &&
+      identity.companyId === binding.companyId && identity.issueId === binding.issueId &&
+      identity.runId === binding.runId && identity.sessionId === binding.sessionId &&
+      identity.agentId === binding.agentId &&
+      sessionOriginRunnerInstances.get(session) === binding.runnerInstanceId;
+  });
+  if (matches.length === 0) return "not_found";
+  if (matches.length !== 1) return "busy";
+  const [cleanup] = matches;
+  if (!cleanup.operatorRecoveryRequired) return "not_operator_required";
+  if (cleanup.attempt || cleanup.recovery || cleanup.timer) return "busy";
+
+  cleanup.operatorRecoveryRequired = false;
+  cleanup.automaticAttempts += 1;
+  const attempt = Promise.resolve().then(() => cleanup.session.close({
+    reason: "operator requested exact native session cleanup retry",
+  }));
+  cleanup.attempt = attempt;
+  failedSessionCleanupOwners.set(attempt, cleanup.domain);
+  try {
+    await attempt;
+    quarantinedSessionCleanups.delete(cleanup);
+    return "settled";
+  } catch {
+    cleanup.operatorRecoveryRequired = true;
+    return "still_incomplete";
+  } finally {
+    failedSessionCleanupOwners.delete(attempt);
+    if (cleanup.attempt === attempt) cleanup.attempt = null;
+  }
+}
+
 /** Control-plane-only cleanup boundary after the environment provider confirmed
  * termination of the exact remote resource for this run. This retires process
  * ownership, not checkpoints, action outcomes, or authorization to run again.
