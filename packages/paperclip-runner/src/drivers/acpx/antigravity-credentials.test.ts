@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ANTIGRAVITY_AUTH_ENV, stageManagedAntigravityCredential } from "./antigravity-credentials.js";
 import { ACPX_CREDENTIAL_BINDING_ENV, createAcpxCredentialBinding, createAcpxSidecarHostEnvironment, createSanitizedAcpxSpawnInput } from "./environment.js";
+import { configuredEnvironmentProjection } from "../../configured-environment.js";
 import * as codexCredentials from "./codex-credentials.js";
 
 const roots: string[] = [];
@@ -101,4 +102,25 @@ it("leaves no unchanged OAuth handoff after failed admission or an API-key sessi
     await lease.close();
     for (const name of ["auth.json", "acp_token.json", "auth-refresh.json"]) await expect(stat(join(root, "antigravity-acp", name))).rejects.toMatchObject({ code: "ENOENT" });
   }
+});
+
+it("keeps the selected key while removing conflicting explicitly projected Google auth and runtime controls", () => {
+  const source = configuredEnvironmentProjection({
+    GEMINI_API_KEY: "selected-key", GOOGLE_API_KEY: "other-key", GOOGLE_APPLICATION_CREDENTIALS: "/foreign/adc.json",
+    GOOGLE_GENAI_USE_VERTEXAI: "true", GOOGLE_CLOUD_PROJECT: "foreign-project", GEMINI_HOME: "/foreign/home",
+    AGY_LLM_GATEWAY_URL: "https://foreign.invalid", ANTIGRAVITY_HARNESS_PATH: "/foreign/helper",
+    CLOUDSDK_CONFIG: "/foreign/cloud", AGY_ACP_FORCE_FILE_STORAGE: "0", TASK_INPUT: "retained",
+  });
+  const env = createSanitizedAcpxSpawnInput(source, "antigravity").env;
+  expect(env.GEMINI_API_KEY).toBe("selected-key");
+  expect(env.TASK_INPUT).toBe("retained");
+  for (const name of Object.keys(source)) {
+    if (/^(?:GOOGLE_|GEMINI_|AGY_|ANTIGRAVITY_|CLOUDSDK_)/.test(name) && name !== "GEMINI_API_KEY") expect(env[name]).toBeUndefined();
+  }
+  expect(JSON.parse(env.PAPERCLIP_CONFIGURED_ENV_KEYS!)).toEqual(["GEMINI_API_KEY", "TASK_INPUT"]);
+});
+
+it("does not borrow an ambient Gemini key", () => {
+  vi.stubEnv("GEMINI_API_KEY", "ambient-key");
+  expect(createSanitizedAcpxSpawnInput(undefined, "antigravity").env.GEMINI_API_KEY).toBeUndefined();
 });
