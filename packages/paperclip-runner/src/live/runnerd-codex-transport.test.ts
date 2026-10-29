@@ -2601,8 +2601,8 @@ it.each(["reuse", "large-instructions", "rotated-recovery", "removed-context", "
   const checkpoint = vi.fn();
   const releaseRoute = vi.fn();
   let currentRun = () => "";
-  const create = (closeGraceMs = 5_000, runId = "run-prepared") => createCapabilityRunnerdCodexTransport({ provider: "codex", runnerArtifact: artifact,
-    closeGraceMs,
+  const create = (closeGraceMs?: number, runId = "run-prepared") => createCapabilityRunnerdCodexTransport({ provider: "codex", runnerArtifact: artifact,
+    ...(closeGraceMs === undefined ? {} : { closeGraceMs }),
     stateDirectory: root, runtimeContext: runId === "run-prepared" ? context
       : mode === "removed-context" ? null : mode === "omitted-context" ? undefined : context,
     ...(mode === "rotated-recovery" || mode === "removed-context" || mode === "omitted-context" ? {
