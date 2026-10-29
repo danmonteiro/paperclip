@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { comparisonPaths, planTasks } from "../ci-plan.mjs";
+import { turboArgs } from "../../../scripts/ci/turbo-args.mjs";
 
 const root = new URL("../../../", import.meta.url);
 const config = JSON.parse(readFileSync(new URL("turbo.json", root), "utf8"));
@@ -24,6 +25,20 @@ test("trusted workflow fallbacks preserve every declared partition and command",
     assert.ok(fallback, `${job}: missing full fallback`);
     assert.deepEqual(JSON.parse(fallback), { include: entries }, job);
   }
+});
+
+test("forced Turbo tasks omit result caching while retaining the cache directory", () => {
+  const args = turboArgs({ target: "//#ci:server", runtimeConfig: ".turbo/task.json",
+    cacheDir: ".turbo/cache", force: true, dryRun: false, args: ["--shard-index", "0"] });
+  assert.ok(args.includes("--force"));
+  assert.ok(args.includes("--cache-dir=.turbo/cache"));
+  assert.ok(!args.some((arg) => arg.startsWith("--cache=") || arg === "--cache"));
+  assert.deepEqual(args.slice(-3), ["--", "--shard-index", "0"]);
+
+  const cachedArgs = turboArgs({ target: "//#ci:server", runtimeConfig: ".turbo/task.json",
+    cacheDir: ".turbo/cache", force: false, dryRun: false, args: [] });
+  assert.ok(cachedArgs.includes("--cache=local:rw"));
+  assert.ok(!cachedArgs.includes("--force"));
 });
 
 test("a UI component retains browser and build coverage without unrelated server/Rust jobs", () => {
