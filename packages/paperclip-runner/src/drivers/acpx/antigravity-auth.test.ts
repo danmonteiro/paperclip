@@ -78,6 +78,21 @@ function googleIdentity(emailVerified = true) {
 }
 
 describe("Antigravity setup-only Google authentication", () => {
+  it.each(["network", "unverified"])("preserves an OAuth rotation when userinfo %s verification fails", async failure => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "paperclip-antigravity-rotation-test-"))); roots.push(home);
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(home, "antigravity-acp"), { mode: 0o700 });
+    const token = join(home, "antigravity-acp", "acp_token.json");
+    await writeFile(token, JSON.stringify(credential), { mode: 0o600 });
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ access_token: "fixture-access-token", refresh_token: "fixture-newest-rotation", token_type: "Bearer" }));
+    if (failure === "network") fetch.mockRejectedValueOnce(new Error("fixture userinfo unavailable"));
+    else fetch.mockResolvedValueOnce(Response.json({ email: "person@example.test", email_verified: false }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(verifyAntigravityCredential(home)).rejects.toThrow();
+    expect(JSON.parse(await readFile(token, "utf8")).refresh_token).toBe("fixture-newest-rotation");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("performs native authenticate, retires it, verifies identity, and preserves refresh rotation without repeated status network calls", async () => {
     const home = await fixture(), fetch = googleIdentity(); vi.stubGlobal("fetch", fetch);
     const login = startAntigravityBrowserLogin(home);

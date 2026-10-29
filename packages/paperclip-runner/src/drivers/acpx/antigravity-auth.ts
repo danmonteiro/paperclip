@@ -115,20 +115,28 @@ export async function verifyAntigravityCredential(home: string, options: { signa
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: value.refresh_token as string, client_id: CLIENT_ID, client_secret: value.client_secret as string }) });
   if (typeof token.access_token !== "string" || token.access_token.length > 16_384 || /[\x00-\x20\x7f]/.test(token.access_token) || !token.access_token
     || (token.token_type !== undefined && String(token.token_type).toLowerCase() !== "bearer")) throw new Error(LOGIN_ERROR);
-  const identity = await googleJson("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${token.access_token}` },
-    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
-  if (identity.email_verified !== true || typeof identity.email !== "string" || identity.email.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(identity.email)) throw new Error("Google could not verify the signed-in account.");
   let next = credential;
   if (token.refresh_token !== undefined && token.refresh_token !== value.refresh_token) {
     next = sanitizeAntigravityCredential(JSON.stringify({ ...value, refresh_token: token.refresh_token }));
-    // Refresh-token rotation must be preserved in the private login home. The
-    // connection owner performs its own generation-checked encrypted writeback.
+    // Preserve a consumed rotation before another request can fail. This is a
+    // private, unverified receipt until userinfo succeeds; the connection owner
+    // still performs identity and generation-checked encrypted writeback.
     await checkAntigravityPrivateHome(home);
     const target = join(home, "antigravity-acp", "acp_token.json"), temporary = `${target}.${randomUUID()}.tmp`;
     const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try { await file.writeFile(next); } finally { await file.close(); }
-    try { await rename(temporary, target); } finally { await rm(temporary, { force: true }); }
+    try {
+      await file.writeFile(next);
+      await file.sync();
+    } finally { await file.close(); }
+    try {
+      await rename(temporary, target);
+      const directory = await open(join(home, "antigravity-acp"), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await rm(temporary, { force: true }); }
   }
+  const identity = await googleJson("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${token.access_token}` },
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
+  if (identity.email_verified !== true || typeof identity.email !== "string" || identity.email.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(identity.email)) throw new Error("Google could not verify the signed-in account.");
   const result = { credential: next, accountEmail: identity.email };
   // Runtime refresh checks use short-lived prepared homes. Retain credentials
   // only for an active, bounded browser attempt, whose abort owns eviction.

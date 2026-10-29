@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { spawnRunner, type RunnerProcessLaunchSpec } from "../control-plane/durable-prp-control-plane.js";
 import { bindAcpxCandidateAdmission, type AcpxCandidateAdmission } from "../drivers/acpx/candidate-admission.js";
 import { ANTIGRAVITY_DISTRIBUTION_PINS } from "../drivers/acpx/generated-profiles.js";
@@ -16,6 +16,33 @@ const candidate = (): AcpxCandidateAdmission => ({ schema: "paperclip.acpx-candi
 const supported = process.platform === "darwin" && process.arch === "arm64";
 
 describe("Antigravity candidate trusted startup", () => {
+  it("bounds argv and structured launches by the absolute candidate expiry across replacement", () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const admission = bindAcpxCandidateAdmission({ ...candidate(), expiresAt: now + 2_000 }, identity);
+      const launches: RunnerProcessLaunchSpec[] = [];
+      const handle = spawnRunner({ connectUrl: "ws://127.0.0.1:43127", stateDirectory: "/unused/candidate", identity,
+        ticket: "inert-ticket", maxOutboxBytes: 262144, p0ReserveBytes: 65536, maxRuntimeMs: 0, maxLifetimeMs: 10_000,
+        runnerVersion: "fixture", runnerDigest: `sha256:${"f".repeat(64)}`,
+        acpxLaunchProfile: { candidateAdmission: admission, authorityDigest: `sha256:${"d".repeat(64)}`, command: "/owned/node", commandSha256: `sha256:${"b".repeat(64)}`,
+          sidecarScript: "/owned/sidecar.cjs", sidecarScriptSha256: `sha256:${"c".repeat(64)}` },
+        processLauncher: spec => { launches.push(spec); return { child: { pid: 42, exitCode: 0, signalCode: null, kill: () => true },
+          completion: Promise.resolve({ code: 0, signal: null, stdout: "", stderr: "" }) }; },
+      });
+      expect(launches[0]!.args).not.toContain("--max-lifetime-ms");
+      expect(launches[0]!.args.slice(-2)).toEqual(["--max-runtime-ms", "2000"]);
+      expect(launches[0]!.nativeRunner).toMatchObject({ maxRuntimeMs: 2000, maxLifetimeMs: 2000 });
+      now += 1_500;
+      handle.restart!("replacement-ticket");
+      expect(launches[1]!.args.slice(-2)).toEqual(["--max-runtime-ms", "500"]);
+      expect(launches[1]!.nativeRunner).toMatchObject({ maxRuntimeMs: 500, maxLifetimeMs: 500 });
+      now += 501;
+      expect(() => handle.restart!("expired-ticket")).toThrow("runner_process_lifetime_expired");
+      expect(launches).toHaveLength(2);
+    } finally { clock.mockRestore(); }
+  });
+
   it.skipIf(!supported)("allows an explicit cold local owner while rejecting absent and broadened authority", async () => {
     const root = await mkdtemp(join(tmpdir(), "antigravity-candidate-startup-"));
     try {
