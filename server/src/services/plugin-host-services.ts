@@ -540,7 +540,7 @@ const KNOWN_PROVIDER_SPAN_NAMES: ReadonlySet<string> = new Set([
   "plugin.worker", "plugin.host.identity.read", "plugin.host.config.read", "plugin.host.progress.read", "plugin.host.progress.write",
   "plugin.workspace.prepare", "plugin.storage.queue", "plugin.storage.execute",
   "plugin.runtime.queue", "plugin.runtime.prepare", "plugin.runtime.reconcile", "plugin.runtime.verify",
-  "plugin.launcher.request", "plugin.remote.operation",
+  "plugin.remote.request", "plugin.remote.operation",
 ]);
 
 /** Clamp the span name to a closed, namespaced set. A known name maps to
