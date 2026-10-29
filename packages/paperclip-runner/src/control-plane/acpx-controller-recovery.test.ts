@@ -180,12 +180,15 @@ async function fixture(maxLifetimeMs?: number, candidateAdmission?: AcpxCandidat
 }
 
 async function assertActiveExpiry(candidate = false) {
-  const lifetimeMs = 3_000;
+  // Cold CI can spend three seconds reaching prepare. Keep a finite launch
+  // grant that includes setup, and never renew it after the active witness.
+  const lifetimeMs = 15_000;
   const candidateAdmission = candidate ? bindAcpxCandidateAdmission({ schema: "paperclip.acpx-candidate-admission.v1", companyId: "company-expiry",
     agent: "antigravity", model: "gemini-3.8-flash-low", profileDigest: profiles.profiles.antigravity.commandDigest,
     nativeClosureDigest: `sha256:${ANTIGRAVITY_DISTRIBUTION_PINS["darwin-arm64"].closureSha256}`,
     platform: "darwin", architecture: "arm64", expiresAt: Date.now() + lifetimeMs }, identity) : undefined;
   const run = await fixture(candidate ? undefined : lifetimeMs, candidateAdmission);
+  const deadlineAt = candidateAdmission?.expiresAt ?? Date.parse(run.startedAt) + lifetimeMs;
   try {
     await run.ready();
     expect(await run.command("turn.start", { turnId: "provider-expiring-turn", text: "Keep this hermetic turn active" })).toMatchObject({ status: "completed" });
@@ -193,9 +196,10 @@ async function assertActiveExpiry(candidate = false) {
     expect(launch.pid).toBeGreaterThan(1);
     expect(() => process.kill(launch.pid, 0)).not.toThrow();
     expect(await run.command("session.snapshot")).toMatchObject({ result: { result: { activeProviderTurnId: "provider-expiring-turn" } } });
+    expect(Date.now()).toBeLessThan(deadlineAt);
     // No stop/cancel request is sent. The real daemon must enforce the launch
     // deadline while the provider is active, then finish physical cleanup.
-    await vi.waitFor(() => expect(run.child.exitCode ?? run.child.signalCode).not.toBeNull(), { timeout: lifetimeMs + 4_000 });
+    await vi.waitFor(() => expect(run.child.exitCode ?? run.child.signalCode).not.toBeNull(), { timeout: Math.max(1, deadlineAt - Date.now()) + 4_000 });
     expect(run.child.exitCode).not.toBe(0);
     expect(() => process.kill(launch.pid, 0)).toThrow();
     expect(run.processGroupId).toBeGreaterThan(1);
@@ -209,10 +213,10 @@ async function assertActiveExpiry(candidate = false) {
   } finally { await run.cleanup(); }
 }
 
-it("expires an active provider turn at the launch lifetime and physically retires its owned processes", () => assertActiveExpiry(), 15_000);
+it("expires an active provider turn at the launch lifetime and physically retires its owned processes", () => assertActiveExpiry(), 30_000);
 it.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
   "retires an active exact Antigravity candidate at absolute operator expiry with no caller runtime limit",
-  () => assertActiveExpiry(true), 15_000);
+  () => assertActiveExpiry(true), 30_000);
 
 it("keeps the original native ACPX process and active turn through controller replacement",async()=>{
   const run=await fixture();
