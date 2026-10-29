@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentHarnessType, agentRuntimeSettingsHarness, paperclipRunnerProfileForHarness } from "./agent-runner.js";
 import { aiConnectionMetadataSchema, isAiConnectionCompatible } from "./ai-connections.js";
+import { aiRoutingHarness } from "./ai-provider-routing.js";
 
 describe("Antigravity native runtime identity and credentials", () => {
   const config = { provider: "acpx", acpxAgent: "antigravity" };
@@ -10,6 +11,7 @@ describe("Antigravity native runtime identity and credentials", () => {
   it("uses a native harness identity without a legacy adapter transition", () => {
     expect(agentHarnessType("paperclip_runner", config)).toBe("antigravity_runtime");
     expect(agentRuntimeSettingsHarness("paperclip_runner", config)).toBe("antigravity_runtime");
+    expect(aiRoutingHarness("paperclip_runner", "acpx", "antigravity")).toBe("antigravity_runtime");
     expect(paperclipRunnerProfileForHarness("antigravity_runtime")).toBeUndefined();
   });
 
