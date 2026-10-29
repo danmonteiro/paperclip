@@ -4475,6 +4475,7 @@ describe("executeNativeSession recovery", () => {
     const scopedIdentity = { ...identity, companyId: "operator-cleanup-company", issueId: "operator-cleanup-issue",
       runId: "operator-cleanup-run", sessionId: "operator-cleanup-session", agentId: "operator-cleanup-agent" };
     const closeFailure = new NativeSessionCloseUnrecoverableError();
+    let failOperatorRetry = true;
     const capabilities = { resume: true, typedEvents: true, steering: false, interruption: false, structuredResult: true };
     const session: NativeSession = {
       identity: () => scopedIdentity, capabilities: async () => capabilities,
@@ -4484,6 +4485,10 @@ describe("executeNativeSession recovery", () => {
         providerSessionId: "operator-cleanup-provider", cursor: null, activeTurnId: null, pendingRuntimeRequests: [], lineage: [] }; },
       close: vi.fn(async ({ reason }: { reason: string }) => {
         if (reason !== "operator requested exact native session cleanup retry") throw closeFailure;
+        if (failOperatorRetry) {
+          failOperatorRetry = false;
+          throw closeFailure;
+        }
       }),
     };
     const backend: NativeSessionBackend = {
@@ -4507,8 +4512,10 @@ describe("executeNativeSession recovery", () => {
     const binding = { ...scopedIdentity, runnerInstanceId };
     expect(await retryQuarantinedNativeSessionCleanup({ ...binding, issueId: "other-issue" })).toBe("not_found");
     expect(await retryQuarantinedNativeSessionCleanup({ ...binding, runnerInstanceId: "other-runner" })).toBe("not_found");
+    expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("still_incomplete");
+    expect(await retryQuarantinedNativeSessionCleanup({ ...binding, issueId: "other-issue" })).toBe("not_found");
     expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("settled");
-    expect(session.close).toHaveBeenCalledTimes(2);
+    expect(session.close).toHaveBeenCalledTimes(3);
     expect(session.close).toHaveBeenLastCalledWith({ reason: "operator requested exact native session cleanup retry" });
     expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("not_found");
     expect(backend.openSession).toHaveBeenCalledOnce();
