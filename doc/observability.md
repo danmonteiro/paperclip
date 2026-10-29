@@ -652,7 +652,7 @@ task.provider_session
 │   │   ├── runner.session.bootstrap | runner.session.resume
 │   │   └── runner.turn.submit
 │   └── agent.turn
-│       ├── provider.turn.queue
+│       ├── runner.turn.submitted_to_started
 │       ├── provider.time_to_first_agent_event
 │       ├── tool.request.input_stream
 │       └── tool.execute
@@ -2060,7 +2060,7 @@ names, attributes, status and timestamps again. A worker cannot choose a trace
 parent. Existing provider `startSpan` calls are retained as children of the
 worker receipt. `ctx.tracer.withSpan` supplies async-local nesting; it is optional
 for compatibility with older SDK fixtures. The host generates each child span's
-identity. Receipts are limited to 256 nodes and 12 levels. Missing, invalid,
+identity. Receipts share one invocation-wide budget of 256 nodes and 12 levels. The worker root supports up to 24 hours; short children keep their widths on long execute calls. Nested timestamps share one monotonic origin. Missing, invalid,
 expired and cross-invocation context cannot select another call's parent.
 
 | Boundary | Coverage | Owner and clock | Meaning / limit |
@@ -2073,7 +2073,7 @@ expired and cross-invocation context cannot select another call's parent.
 | Command and provider admission | `runner.transport.turn_start`, `command_ack`, `started_event`; optional ACPX `runner.remote.turn_start` → `runner.sidecar.turn_start` → `status_read`, `prompt_started` | Local monotonic spans; remote numeric durations anchored at receipt | Command ACK proves durable command completion. ACPX `promptStarted` proves the runtime prompt-start barrier, not a model token or provider queue exit. SDK-internal work stays opaque. |
 | Durable events | `runner.event.persist` with bounded event kind | Host-local monotonic interval | Receipt through event transaction commit, before live publication. Duplicate receipts are not new provider starts. |
 | First event / first text | Existing `provider.time_to_first_agent_event`, `task.time_to_first_token`; `response.first_nonempty_text` | Durable event observations | First event can be a tool; text must be nonempty and pass the existing deliverable-text observer. |
-| Completion | `completion.request.first`, existing `tool.request.input_stream`, `completion.tool_accepted`, `completion.result_committed` | Same turn; provider tool identity retained only in memory | Input-stream end is the last observed argument update. `run.result.proposed` is the validated tool receipt; `run.result.accepted` is later result finalization. Neither certifies response publication. |
+| Completion | `completion.request.first`, existing `tool.request.input_stream`, `completion.tool_accepted`, `completion.result_committed` | Same turn; provider tool identity retained only in memory | Input-stream end is the last observed argument update. `run.result.proposed` is the validated tool receipt; `completion.result_committed` follows the successful result transaction; the earlier `run.result.accepted` event alone does not prove persistence. Neither certifies response publication. |
 | Reply commit / publication | Existing response transaction/write/publish phases | Response owner, transaction and local publication | Keep separate from tool acceptance and first text. |
 | Input/context | `inputBytes`, `toolSchemaBytes`, `toolCount`, `contextReused`, `tokenDataAvailable` | Controller numeric/boolean metadata | Counts only. No prompts, instructions, tool arguments or credentials. Token/cache counters remain unavailable unless supplied by a provider with known semantics. Model/effort stay in existing effective run settings. |
 
@@ -2089,3 +2089,10 @@ Core contains generic operation semantics only. Before using this coverage to
 rank optimizations, deploy a compatible source set and inspect actual collector
 exports for parentage, concurrent ownership, widths and closed failure spans.
 Unit tests do not establish ingestion or a latency improvement.
+
+The shared ACPX instrumentation advances Grok source profile 12 to 13 and
+Copilot 81 to 82. Historical identities remain unchanged and decodable. Provider
+packages, models and permission defaults are unchanged; Pi's bound declaration
+is unchanged. These are source attestations, not evidence of fresh live provider
+qualification. Re-run compatibility qualification for the new identities before
+rollout.

@@ -86,6 +86,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
   #sessionId: string | null = null;
   readonly #assertControllerActive?: () => void;
   readonly #assertRunAdmissionActive?: () => void;
+  readonly #onResultCommitted?: () => Promise<void>;
   readonly #onEventPersistence?: (event: PrpEvent, startedAtMs: number, endedAtMs: number) => Promise<void>;
   readonly #onCommittedEvent?: (event: PrpEvent) => Promise<void>;
   readonly #onDuplicateEvent?: (event: PrpEvent) => Promise<void>;
@@ -100,6 +101,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       assertControllerActive?: () => void;
       /** Read-only admission may finish an existing startup solely for restart detachment. */
       assertRunAdmissionActive?: () => void;
+      onResultCommitted?: () => Promise<void>;
       onEventPersistence?: (event: PrpEvent, startedAtMs: number, endedAtMs: number) => Promise<void>;
       onCommittedEvent?: (event: PrpEvent) => Promise<void>;
       onDuplicateEvent?: (event: PrpEvent) => Promise<void>;
@@ -112,6 +114,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
     this.#binding = structuredClone(binding);
     this.#onCommittedEvent = options.onCommittedEvent;
     this.#onEventPersistence = options.onEventPersistence;
+    this.#onResultCommitted = options.onResultCommitted;
     this.#onDuplicateEvent = options.onDuplicateEvent;
   }
 
@@ -463,5 +466,6 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
       }).where(eq(heartbeatRuns.id, this.#binding.runId));
       this.#assertActive(options);
     });
+    try { await this.#onResultCommitted?.(); } catch {}
   }
 }

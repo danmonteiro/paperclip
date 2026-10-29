@@ -1107,6 +1107,8 @@ export interface PluginSpan {
  * active host trace context.
  */
 export interface PluginTracer {
+  /** Invocation-wide monotonic clock anchored to epoch milliseconds. */
+  now?(): number;
   isRecording?(): boolean;
   /** Completed bounded timing receipt; the host validates times and parentage. */
   recordSpan?(span: import("./protocol.js").PluginSpanRecord): void;

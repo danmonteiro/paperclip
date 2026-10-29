@@ -314,6 +314,8 @@ export interface PluginInvocationContext {
  * host-issued invocation id.
  */
 export interface WorkerHostCallContext {
+  /** Host-owned aggregate timing budget; never received from the worker. */
+  providerSpanBudget?: { remaining: number };
   invocationScope?: PluginInvocationScope | null;
   invalidInvocationScope?: boolean;
   /**

@@ -352,3 +352,14 @@ it("allows a workspace provider timing receipt without environment-driver author
  await handlersFor(["workspaces.manage"])["span.record"]({name:"plugin.worker"},{traceparent:VALID_TRACEPARENT} as WorkerHostCallContext);
  expect(mockRecordSpan).toHaveBeenCalledTimes(1);
 });
+
+it("retains short children of a multi-hour worker invocation and shares its aggregate budget",()=>{
+ mockRecordSpan.mockReset();mockRecordSpan.mockReturnValue({traceId:"0af7651916cd43dd8448eb211c80319c",spanId:"1111111111111111",traceFlags:1});
+ const now=Date.now(),context={traceparent:VALID_TRACEPARENT,providerSpanBudget:{remaining:3}};
+ recordWorkerProviderSpan({name:"plugin.worker",startTimeMs:now-7200000,endTimeMs:now,children:[
+  {name:"pack",startTimeMs:now-7199990,endTimeMs:now-7199980}
+ ]},context);
+ recordWorkerProviderSpan({name:"pack"},context);recordWorkerProviderSpan({name:"pack"},context);
+ expect(mockRecordSpan).toHaveBeenCalledTimes(3);
+ expect(mockRecordSpan.mock.calls[1][0]).toMatchObject({name:"sandbox.daytona.pack",startTimeMs:now-7199990});
+});

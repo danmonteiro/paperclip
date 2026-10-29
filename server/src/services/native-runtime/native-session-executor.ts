@@ -8625,6 +8625,10 @@ async function executePaperclipNativeSessionWithinScope(
       privateKeyPem: input.runnerEnvironment?.PAPERCLIP_AGENT_PRIVATE_KEY,
       assertControllerActive,
       assertRunAdmissionActive,
+      onResultCommitted: async () => {
+        const at=Date.now();
+        await trace.record({name:"completion.result_committed",parentName:"native.session.execute",startedAtMs:at,endedAtMs:at});
+      },
       onEventPersistence: async (event, startedAtMs, endedAtMs) => {
         if (["turn.submitted", "turn.started", "turn.accepted", "run.result.accepted"].includes(event.eventType)) {
           await trace.record({name: "runner.event.persist", parentName: "native.session.execute", startedAtMs, endedAtMs,
@@ -8632,9 +8636,9 @@ async function executePaperclipNativeSessionWithinScope(
         }
       },
       onCommittedEvent: async (event) => {
-        if (event.eventType === "run.result.proposed" || event.eventType === "run.result.accepted") {
+        if (event.eventType === "run.result.proposed") {
           const at = Date.now();
-          await trace.record({name:event.eventType === "run.result.proposed" ? "completion.tool_accepted" : "completion.result_committed",parentName:"native.session.execute",startedAtMs:at,endedAtMs:at});
+          await trace.record({name:"completion.tool_accepted",parentName:"native.session.execute",startedAtMs:at,endedAtMs:at});
         }
         if (event.eventType === "harness.diagnostic") {
           await recordNativeProviderPerformanceSpans(trace, parseProviderPerformanceSpans(event.payload, Date.now()));

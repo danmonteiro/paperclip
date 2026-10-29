@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createInvocationTracer } from "../src/invocation-tracer.js";
 import type { PluginSpanRecord } from "../src/protocol.js";
 
@@ -37,5 +37,22 @@ describe("invocation timing receipts",()=>{
   });
   expect(records[0].children).toHaveLength(255);
   await detached();expect(records).toHaveLength(1);
+ });
+});
+
+it("uses one monotonic origin across children even if the epoch clock changes",async()=>{
+ const records:PluginSpanRecord[]=[];const tracer=createInvocationTracer(()=>true,span=>records.push(span));
+ const clock=vi.spyOn(Date,"now").mockReturnValueOnce(1000).mockReturnValue(999999);
+ try {await tracer.withSpan("root",async()=>{await tracer.withSpan("child",async()=>{});});}
+ finally {clock.mockRestore();}
+ const root=records[0],child=root.children![0];
+ expect(child.startTimeMs!).toBeGreaterThanOrEqual(root.startTimeMs!);
+ expect(child.endTimeMs!).toBeLessThanOrEqual(root.endTimeMs!);
+ expect(root.endTimeMs!).toBeLessThan(999999);
+});
+it("consumes excess legacy records instead of falling back to standalone export",async()=>{
+ const tracer=createInvocationTracer(()=>true,()=>{});
+ await tracer.withSpan("root",async()=>{
+  for(let n=0;n<300;n++)expect(tracer.recordSpan({name:"pack"})).toBe(true);
  });
 });

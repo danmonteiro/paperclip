@@ -6,7 +6,7 @@ export function createInvocationTracer(
   enabled: () => boolean,
   record: (span: PluginSpanRecord) => void,
 ) {
-  type Scope = { span: PluginSpanRecord; budget: { remaining: number }; closed: boolean };
+  type Scope = { span: PluginSpanRecord; budget: { remaining: number }; closed: boolean; clock: {epoch:number; origin:number} };
   const active = new AsyncLocalStorage<Scope>();
   async function withSpan<T>(name: string, work: () => T | Promise<T>, attributes?: Record<string, string | number | boolean>): Promise<T> {
     if (!enabled()) return work();
@@ -15,24 +15,31 @@ export function createInvocationTracer(
     if (parent?.closed) return work();
     const budget = parent?.budget ?? { remaining: 256 };
     if (budget.remaining-- <= 0) return work();
-    const startTimeMs = Date.now(), started = performance.now();
+    const clock = parent?.clock ?? {epoch:Date.now(), origin:performance.now()};
+    const startTimeMs = clock.epoch + performance.now() - clock.origin;
     const span: PluginSpanRecord = { name, startTimeMs, attributes, children: [] };
-    const scope: Scope = { span, budget, closed: false };
+    const scope: Scope = { span, budget, closed: false, clock };
     parent?.span.children?.push(span);
     try { return await active.run(scope, work); }
     catch (error) { span.status = { code: 2 }; throw error; }
     finally {
       scope.closed = true;
-      span.endTimeMs = startTimeMs + Math.max(0, performance.now() - started);
+      span.endTimeMs = clock.epoch + performance.now() - clock.origin;
       if (!parent) { try { record(span); } catch {} }
     }
   }
   return {
     withSpan,
+    clock: () => {
+      const clock=active.getStore()?.clock ?? {epoch:Date.now(),origin:performance.now()};
+      return () => clock.epoch+performance.now()-clock.origin;
+    },
+    now: () => { const clock=active.getStore()?.clock; return clock ? clock.epoch+performance.now()-clock.origin : Date.now(); },
     isRecording: enabled,
     recordSpan(span: PluginSpanRecord): boolean {
       const scope = active.getStore();
-      if (!enabled() || !scope || scope.closed || scope.budget.remaining-- <= 0) return false;
+      if (!scope) return false;
+      if (!enabled() || scope.closed || scope.budget.remaining-- <= 0) return true;
       scope.span.children?.push(span);
       return true;
     },
