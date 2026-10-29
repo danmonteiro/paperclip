@@ -313,7 +313,11 @@ async function handleRequest(
     );
     return;
   }
-  const callId = `${context.callNamespace}:${rpcIdKey(id)}`;
+  const callId = [
+    context.callNamespace,
+    typeof id,
+    createHash("sha256").update(String(id)).digest("hex"),
+  ].join(":");
   const callKey = rpcIdKey(id);
   const args = params.arguments ?? {};
   const validator = context.validators.get(tool);

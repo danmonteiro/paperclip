@@ -139,7 +139,7 @@ describe("runner semantic MCP bridge", () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         tool: "documents.read",
-        callId: expect.stringMatching(/^[0-9a-f]{16}:string:call-1$/),
+        callId: expect.stringMatching(/^[0-9a-f]{16}:string:[0-9a-f]{64}$/),
         arguments: { id: "doc" },
       }),
     );
@@ -214,8 +214,8 @@ describe("runner semantic MCP bridge", () => {
     });
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler.mock.calls[0]![0].callId).not.toBe(handler.mock.calls[1]![0].callId);
-    expect(handler.mock.calls.map(([call]) => call.callId.split(":").slice(-2).join(":")))
-      .toEqual(["number:1", "string:1"]);
+    expect(handler.mock.calls.map(([call]) => call.callId.split(":")[1]))
+      .toEqual(["number", "string"]);
   });
 
   it("namespaces durable call identities across replacement provider bridges", async () => {
@@ -229,8 +229,24 @@ describe("runner semantic MCP bridge", () => {
 
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler.mock.calls[0]![0].callId).not.toBe(handler.mock.calls[1]![0].callId);
-    expect(handler.mock.calls[0]![0].callId.split(":").slice(-2).join(":")).toBe("string:2");
-    expect(handler.mock.calls[1]![0].callId.split(":").slice(-2).join(":")).toBe("string:2");
+    expect(handler.mock.calls[0]![0].callId).toMatch(/^[0-9a-f]{16}:string:[0-9a-f]{64}$/);
+    expect(handler.mock.calls[1]![0].callId).toMatch(/^[0-9a-f]{16}:string:[0-9a-f]{64}$/);
+  });
+
+  it("keeps maximum-length JSON-RPC IDs within the persisted recovery identity limit", async () => {
+    const handler = vi.fn(async ({ callId }) => ({ callId }));
+    const bridge = await startRunnerToolBridge({ tools: [tool("documents.read")], handler });
+    bridges.push(bridge);
+
+    await rpc(bridge, {
+      id: "x".repeat(240),
+      method: "tools/call",
+      params: { name: "documents.read", arguments: {} },
+    });
+
+    const callId = handler.mock.calls[0]![0].callId;
+    expect(callId).toHaveLength(16 + 1 + "string".length + 1 + 64);
+    expect(callId.length).toBeLessThanOrEqual(240);
   });
 
   it("times out calls", async () => {
@@ -564,11 +580,25 @@ describe("Copilot semantic receipt opt-in", () => {
     },
   );
   it("keeps concurrent call captures separate and ignores captures after settlement", async () => {
-    const pending = new Map<string, { capture: NonNullable<import("./runner-tool-bridge.js").RunnerToolCall["captureNormalizedInput"]>; settle: () => void }>();
+    const pending = new Map<
+      string,
+      {
+        capture: NonNullable<import("./runner-tool-bridge.js").RunnerToolCall["captureNormalizedInput"]>;
+        settle: () => void;
+        summary: unknown;
+      }
+    >();
     const receipts: SemanticToolReceipt[] = [];
-    const bridge = await startRunnerToolBridge({ captureSemanticReceipt: () => receipt => receipts.push(receipt), handler: call => new Promise(resolve => {
-      pending.set(call.callId, { capture: call.captureNormalizedInput!, settle: () => resolve({ accepted: true }) });
-    }) });
+    const bridge = await startRunnerToolBridge({
+      captureSemanticReceipt: () => (receipt) => receipts.push(receipt),
+      handler: (call) => new Promise((resolve) => {
+        pending.set(call.callId, {
+          capture: call.captureNormalizedInput!,
+          settle: () => resolve({ accepted: true }),
+          summary: call.arguments.summary,
+        });
+      }),
+    });
     bridges.push(bridge);
     const first = rpc(bridge, { id: "first", method: "tools/call", params: { name: "paperclip_finish", arguments: rawFinish } });
     const secondInput = { ...rawFinish, summary: "Second call" };
@@ -576,8 +606,8 @@ describe("Copilot semantic receipt opt-in", () => {
     await vi.waitFor(() => expect(pending.size).toBe(2));
     const normalizedFirst = validatePrpStructuredRunResult(rawFinish); const normalizedSecond = validatePrpStructuredRunResult(secondInput);
     if (!normalizedFirst.ok || !normalizedSecond.ok) throw new Error("Invalid fixture");
-    const secondCall = [...pending.entries()].find(([callId]) => callId.endsWith(":second"))?.[1];
-    const firstCall = [...pending.entries()].find(([callId]) => callId.endsWith(":first"))?.[1];
+    const secondCall = [...pending.values()].find(call => call.summary === secondInput.summary);
+    const firstCall = [...pending.values()].find(call => call.summary === rawFinish.summary);
     secondCall!.capture(normalizedSecond.result)(); secondCall!.settle();
     const secondReceipt = readNativeSemanticReceipt({ contents: (await (await second).json()).result.content });
     expect(secondReceipt).toMatchObject({ inputSha256: semanticInputSha256(secondInput), normalizedInputSha256: semanticInputSha256(normalizedSecond.result) });
