@@ -1,3 +1,13 @@
+import { execFileSync } from "node:child_process";
+import { matchesGlob } from "node:path";
+
+export function sourceFiles(cwd = process.cwd()) {
+  return [...new Set(execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).split("\0").filter(Boolean))].sort();
+}
+
+const literalGlob = (file) => file.replace(/([*?{}[\]\\])/g, "\\$1");
+
 const groups = {
   "ci:server": "general-server-without-chat",
   "ci:chat": "general-chat",
@@ -6,7 +16,7 @@ const groups = {
   "ci:db": "general-workspaces-c",
 };
 
-export function executionPlan(config, task, args) {
+export function executionPlan(config, task, args, files = sourceFiles()) {
   const definition = config.tasks[`//#${task}`];
   if (!definition?.cache) throw new Error(`Task is not executable through the cache: ${task}`);
   let target, commandArgs;
@@ -20,7 +30,10 @@ export function executionPlan(config, task, args) {
     target = "@paperclipai/paperclip-runner#check:runner";
     commandArgs = args;
   } else throw new Error(`Missing task command: ${task}`);
-  const inputs = target.startsWith("//#") ? definition.inputs
-    : definition.inputs.map((input) => `$TURBO_ROOT$/${input}`);
-  return { target, args: commandArgs, config: { ...config, tasks: { [target]: { ...definition, inputs } } } };
+  const select = (globs) => files.filter((file) => globs.some((glob) => matchesGlob(file, glob))).map(literalGlob);
+  const selectedInputs = select(definition.inputs);
+  const inputs = target.startsWith("//#") ? selectedInputs
+    : selectedInputs.map((input) => `$TURBO_ROOT$/${input}`);
+  return { target, args: commandArgs, config: { ...config,
+    globalDependencies: select(config.globalDependencies ?? []), tasks: { [target]: { ...definition, inputs } } } };
 }

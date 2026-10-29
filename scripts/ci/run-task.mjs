@@ -2,7 +2,7 @@ import { spawnSync, execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { matchesGlob } from "node:path";
-import { executionPlan } from "./execution-plan.mjs";
+import { executionPlan, sourceFiles } from "./execution-plan.mjs";
 
 const task = process.env.CI_TASK;
 if (!/^ci:[a-z-]+$/.test(task ?? "")) throw new Error("Invalid CI task");
@@ -13,14 +13,15 @@ const version = (command, argv) => {
   catch { return "unavailable"; }
 };
 const config = JSON.parse(readFileSync("turbo.json", "utf8"));
-const execution = executionPlan(config, task, args);
+const files = sourceFiles();
+const execution = executionPlan(config, task, args, files);
 mkdirSync(".turbo/task-configs", { recursive: true });
 const runtimeConfig = `.turbo/task-configs/${task.replace(":", "-")}.json`;
 writeFileSync(runtimeConfig, JSON.stringify(execution.config));
 const classified = [...config.globalDependencies, ...Object.values(config.tasks).flatMap((entry) => entry.inputs)];
 const unknownInputs = createHash("sha256");
 let uncacheable = false;
-for (const file of execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean).sort()) {
+for (const file of files) {
   if (classified.some((glob) => matchesGlob(file, glob))) continue;
   unknownInputs.update(JSON.stringify(file));
   try {

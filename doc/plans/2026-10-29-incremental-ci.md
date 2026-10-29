@@ -44,9 +44,13 @@ A real Turbo fixture proves execution through the existing package scripts,
 result reuse and restoration, source and argument invalidation, environment
 invalidation, and failed-task retries. The execution adapter keeps task aliases
 out of package manifests.
+The real server partition also passed through the adapter: Turbo reported
+20.022 seconds for execution and 151 milliseconds for the repeated cache hit.
+These are task timings, excluding wrapper and GitHub setup overhead.
 
 The planner selects 18 jobs for `ui/src/components/Sidebar.tsx`, compared with the
 existing 48. This is a job-count reduction; remote wall-clock savings have not
-yet been measured. Full repository tests and remote PR checks remain the final
-qualification gates. Activation follows merge because trusted PR execution
+yet been measured. The serial local full-suite attempt was stopped after more
+than 30 minutes in favor of the complete parallel GitHub suite. Remote PR checks
+remain the final qualification gate. Activation follows merge because trusted PR execution
 loads workflow and planner definitions from master.

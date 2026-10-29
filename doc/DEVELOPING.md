@@ -192,7 +192,9 @@ canary dry run.
 
 General and serialized test suites and the standalone Rust suite use Turbo's
 content-addressed cache. An execution adapter maps selected lanes to the existing
-package scripts and their declared inputs. The test scripts keep responsibility
+package scripts and their declared inputs. It selects tracked and non-ignored
+source files, so generated build outputs do not invalidate later task results.
+The test scripts keep responsibility
 for their build prerequisites. GitHub Actions stores
 these results in the PR's own cache scope, so a later push can reuse unchanged
 tasks without giving PRs write access to master caches. Input hashes include
