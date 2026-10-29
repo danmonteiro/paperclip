@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { build } from "esbuild";
 import { verifyNativeAcpxInstallation } from "./installation-integrity.js";
@@ -87,9 +87,9 @@ vi.mock("./installation-integrity.js", () => ({ verifyNativeAcpxInstallation: vi
 
 describe("Copilot build-owned installation", () => {
   it("admits the current profile with environment launch preparation", () => {
-    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(85);
+    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(81);
     expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBeUndefined();
-    expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toBe("sha256:267e04ce9335f7641f665d9b952bc4637056ee1cfeac23715b7aefbc3a8df3c9");
+    expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toBe("sha256:8fa6b611be46d3b151d64ec1eff57a7a2ae7e7289ff4f8400842efd827cd7726");
   });
 
 it("preserves published v65 while binding retained-maintenance waits in v66", async () => {
@@ -140,13 +140,14 @@ it("preserves the historical sleep-maintenance v64 identity", async () => {
   });
 
 
-  it("preserves published profile 79 while binding retained cleanup in profile 80", async () => {
+  it("preserves published profile 79 while binding retained cleanup in profile 81", async () => {
     const bytes = readFileSync(new URL("../../../test/fixtures/copilot-profile-v79-identity.json", import.meta.url));
     expect(createHash("sha256").update(bytes).digest("hex")).toBe("92fb6b5f1a312933f78d650fdc037ded4876d112c472fcfd5c1116cdbb0dae44");
     const prior = JSON.parse(bytes.toString("utf8"));
-    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v80-identity.json", import.meta.url), "utf8"));
+    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v81-identity.json", import.meta.url), "utf8"));
     expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual([
-      "agentProfileVersion", "profileCompatibilitySourceSha256", "runtimeRequestBridgeSourceSha256",
+      "agentProfileVersion", "nativeSessionRuntimeSourceSha256", "profileCompatibilitySourceSha256",
+      "runtimeRequestBridgeSourceSha256", "semanticBridgeSourceSha256",
     ]);
     expect(Object.keys(current.declaration).sort()).toEqual(Object.keys(prior.declaration).sort());
     expect(isSupportedAcpxProfileVersion("copilot", 79)).toBe(true);
@@ -728,7 +729,7 @@ it("preserves the historical sleep-maintenance v64 identity", async () => {
       const result = await verifyCopilotInstallation(QUALIFIED_ACPX_PROFILES.copilot);
       const root = fileURLToPath(new URL(`../../../provider-assets/copilot/${process.platform}-${process.arch}`, import.meta.url));
       expect(verifyNativeAcpxInstallation).toHaveBeenCalledWith({
-        distributionRoot: root, manifestPath: `${root}/.paperclip-copilot-closure.json`,
+        distributionRoot: root, manifestPath: join(root, ".paperclip-copilot-closure.json"),
         expectedClosureSha256: COPILOT_CLOSURE_SHA256[`${process.platform}-${process.arch}` as keyof typeof COPILOT_CLOSURE_SHA256],
         executable: "copilot", fixedArguments: COPILOT_LAUNCH_ARGUMENTS, isolatedCacheEnvironmentName: "COPILOT_PKG_CACHE_HOME",
         copilotDistributionDirectory: "distribution",

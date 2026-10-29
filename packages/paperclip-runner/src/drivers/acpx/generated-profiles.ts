@@ -4,31 +4,17 @@ export const ACPX_DRIVER_KIND = "acpx_runtime" as const;
 export const ACPX_DRIVER_PROTOCOL_VERSION = 1 as const;
 
 export const QUALIFIED_ACPX_PROFILE_DATA = {
-  "antigravity": {
-    "driverKind": "acpx_runtime",
-    "protocolVersion": 1,
-    "acpxVersion": "0.13.1",
-    "agent": "antigravity",
-    "agentProfileVersion": 1,
-    "agentServerPackage": "native:antigravity-acp",
-    "agentServerVersion": "1.4.3",
-    "agentRuntimePackage": "native:antigravity-localharness",
-    "agentRuntimeVersion": "1.4.3",
-    "commandDigest": "sha256:acf5f574b6b9ec4388ff9d081890caa330e66bf1ae3fe3b08e7f0fb0e851b9ce",
-    "qualificationStatus": "pending",
-    "permissionPolicy": "interactive"
-  },
   "grok": {
     "driverKind": "acpx_runtime",
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "grok",
-    "agentProfileVersion": 14,
+    "agentProfileVersion": 11,
     "agentServerPackage": "builtin:grok-acp",
     "agentServerVersion": "1",
     "agentRuntimePackage": "native:grok",
     "agentRuntimeVersion": "1.0.13",
-    "commandDigest": "sha256:ca59edc7f416cc1e86ac7d7d1e288d3d91065b7ab59e79bcb62bae5f0cc5cf49",
+    "commandDigest": "sha256:f43a6f5a583972cdcb422784969cd6a97654655b0f135f1cf178317909c404f8",
     "permissionPolicy": "interactive"
   },
   "pi": {
@@ -36,12 +22,12 @@ export const QUALIFIED_ACPX_PROFILE_DATA = {
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "pi",
-    "agentProfileVersion": 35,
+    "agentProfileVersion": 33,
     "agentServerPackage": "pi-acp",
     "agentServerVersion": "0.0.33",
     "agentRuntimePackage": "@earendil-works/pi-coding-agent",
     "agentRuntimeVersion": "1.0.0",
-    "commandDigest": "sha256:9473de6ef4baf2bd82fe8b6757239bdc160960b0a78ae6f47fa9e0996544226c",
+    "commandDigest": "sha256:0260d5810e9247986800ad46c1f9b3511a5abd06cb8f142405d5caacbc3960fc",
     "permissionPolicy": "interactive"
   },
   "cursor": {
@@ -62,12 +48,12 @@ export const QUALIFIED_ACPX_PROFILE_DATA = {
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "copilot",
-    "agentProfileVersion": 85,
+    "agentProfileVersion": 81,
     "agentServerPackage": "@github/copilot",
     "agentServerVersion": "1.0.88",
     "agentRuntimePackage": null,
     "agentRuntimeVersion": null,
-    "commandDigest": "sha256:267e04ce9335f7641f665d9b952bc4637056ee1cfeac23715b7aefbc3a8df3c9",
+    "commandDigest": "sha256:8fa6b611be46d3b151d64ec1eff57a7a2ae7e7289ff4f8400842efd827cd7726",
     "permissionPolicy": "interactive"
   },
   "claude": {
@@ -113,13 +99,5 @@ export const CURSOR_DISTRIBUTION_PINS = {
     "closureSha256": "eadb8bb8ffb0450455b15b88c9b230307a9e149958a0c452d16dd157b4633d74",
     "executable": "node",
     "entrypoint": "index.js"
-  }
-} as const;
-
-export const ANTIGRAVITY_DISTRIBUTION_PINS = {
-  "darwin-arm64": {
-    "closureSha256": "044792d793e203bc8b4524a418f1816c4d34db67bb41fa4bae5947a050c49b4a",
-    "executable": "agy_acp_server.par",
-    "args": []
   }
 } as const;
