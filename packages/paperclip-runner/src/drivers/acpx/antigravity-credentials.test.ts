@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ANTIGRAVITY_AUTH_ENV, stageManagedAntigravityCredential } from "./antigravity-credentials.js";
 import { ACPX_CREDENTIAL_BINDING_ENV, createAcpxCredentialBinding, createAcpxSidecarHostEnvironment, createSanitizedAcpxSpawnInput } from "./environment.js";
+import * as codexCredentials from "./codex-credentials.js";
 
 const roots: string[] = [];
 const credential = JSON.stringify({ client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
   client_secret: "fixture-client", refresh_token: "fixture-refresh", token_uri: "https://oauth2.googleapis.com/token",
   scopes: ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/aicode"] });
 async function home() { const value = await realpath(await mkdtemp(join(tmpdir(), "antigravity-credential-test-"))); roots.push(value); return value; }
-afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 it.each([{}, { [ANTIGRAVITY_AUTH_ENV]: "{}" }, { [ANTIGRAVITY_AUTH_ENV]: credential, GEMINI_API_KEY: "fixture-key" }])("rejects absent, malformed or ambiguous credentials", async environment => {
   await expect(stageManagedAntigravityCredential({ agentHomeDirectory: await home(), environment })).rejects.toThrow(/credential/);
@@ -57,7 +58,43 @@ it("retains ownership when a token is replaced by a symlink, and never reads its
   await rm(token); await writeFile(token, credential, { mode: 0o600 }); await lease.close();
 });
 
-it("leaves no OAuth handoff after failed admission or an API-key session", async () => {
+it("preserves a native OAuth rotation when startup admission never succeeds", async () => {
+  const root = await home(), directory = join(root, "antigravity-acp");
+  const lease = await stageManagedAntigravityCredential({ agentHomeDirectory: root,
+    environment: { [ANTIGRAVITY_AUTH_ENV]: credential }, retainRefresh: () => false });
+  const rotated = credential.replace("fixture-refresh", "failed-startup-rotation");
+  await writeFile(join(directory, "acp_token.json"), rotated, { mode: 0o600 });
+  await lease.close();
+  expect(await readFile(join(directory, "auth-refresh.json"), "utf8")).toBe(rotated);
+  expect((await stat(join(directory, "auth-refresh.json"))).mode & 0o777).toBe(0o600);
+  await expect(stat(join(directory, "acp_token.json"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("retries the original lifetime lease after its first close fails without losing the rotated handoff", async () => {
+  const stage = codexCredentials.stageManagedCodexCredential;
+  let attempts = 0;
+  vi.spyOn(codexCredentials, "stageManagedCodexCredential").mockImplementation(async input => {
+    const actual = await stage(input);
+    return { ...actual, close: async () => {
+      if (++attempts === 1) throw new Error("injected lifetime close failure");
+      await actual.close();
+    } };
+  });
+  const root = await home(), directory = join(root, "antigravity-acp");
+  const input = { agentHomeDirectory: root, environment: { [ANTIGRAVITY_AUTH_ENV]: credential } };
+  const lease = await stageManagedAntigravityCredential(input);
+  const rotated = credential.replace("fixture-refresh", "retry-close-rotation");
+  await writeFile(join(directory, "acp_token.json"), rotated, { mode: 0o600 });
+  try {
+    await expect(lease.close()).rejects.toThrow("injected lifetime close failure");
+    await expect(lease.close()).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+    expect(await readFile(join(directory, "auth-refresh.json"), "utf8")).toBe(rotated);
+    const next = await stageManagedAntigravityCredential(input); await next.close();
+  } finally { await lease.close(); }
+});
+
+it("leaves no unchanged OAuth handoff after failed admission or an API-key session", async () => {
   for (const environment of [{ [ANTIGRAVITY_AUTH_ENV]: credential }, { GEMINI_API_KEY: "fixture-key" }]) {
     const root = await home();
     const lease = await stageManagedAntigravityCredential({ agentHomeDirectory: root, environment, retainRefresh: () => false });

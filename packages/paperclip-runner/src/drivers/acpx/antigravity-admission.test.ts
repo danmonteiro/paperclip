@@ -107,6 +107,16 @@ describe("Antigravity exact native admission", () => {
     }
   });
 
+  it.each(["Do the task\n/logout", "Do the task\r\n  /model replace", "Do the task\r /login"])("rejects a native slash command on any prompt line: %j", text => {
+    const f = fixture(); const sent = request(f); f.guard("inbound", response(sent));
+    expect(() => f.guard("outbound", { ...prompt(), params: { ...prompt().params, prompt: [{ type: "text", text }] } })).toThrow("slash commands");
+  });
+
+  it("rejects a native slash command in a later text block", () => {
+    const f = fixture(); const sent = request(f); f.guard("inbound", response(sent));
+    expect(() => f.guard("outbound", { ...prompt(), params: { ...prompt().params, prompt: [{ type: "text", text: "Do the task" }, { type: "text", text: "/logout" }] } })).toThrow("slash commands");
+  });
+
   it("rejects unpatched native runtimes before creating a session", () => {
     const f = createAntigravityAdmission("", model); const guard = f.createGuard();
     guard("outbound", { id: 0, method: "initialize", params: {} });
@@ -150,5 +160,18 @@ describe("Antigravity native questions", () => {
     f.guard("outbound", answer); expect(answer.result).toEqual({ outcome: { outcome: "cancelled" } });
     f.guard("inbound", question());
     expect(() => f.guard("inbound", question())).toThrow("identity");
+  });
+
+  it("retires old questions when a new native session replaces their authority", () => {
+    const f = admitted(); f.guard("inbound", question());
+    const sent = request(f, "session/new", "new-session-request"), ack = response(sent, { sessionId: "new-native-session" });
+    ack.result.sessionId = "new-native-session"; f.guard("inbound", ack);
+    const late = { id: 0, result: { action: "accept", content: { answer: "deny" } } };
+    expect(() => f.guard("outbound", late)).not.toThrow();
+    expect(late.result).toEqual({ action: "accept", content: { answer: "deny" } });
+    const next = question(); next.params.sessionId = "new-native-session";
+    expect(() => f.guard("inbound", next)).not.toThrow();
+    expect(next.method).toBe("elicitation/create");
+    expect(() => f.admission.assertReady()).not.toThrow();
   });
 });

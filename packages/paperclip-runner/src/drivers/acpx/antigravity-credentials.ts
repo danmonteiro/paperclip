@@ -12,6 +12,7 @@ export const ANTIGRAVITY_AUTH_ENV = "PAPERCLIP_ACPX_ANTIGRAVITY_AUTH_JSON_SECRET
 export async function stageManagedAntigravityCredential(input: {
   agentHomeDirectory: string;
   environment?: NodeJS.ProcessEnv;
+  /** Unchanged copies may be omitted; consumed refresh rotations always survive. */
   retainRefresh?: () => boolean;
 }): Promise<AcpxProviderLifetimeLease> {
   const source = input.environment ?? {};
@@ -41,6 +42,7 @@ export async function stageManagedAntigravityCredential(input: {
     throw error;
   }
   let closed = false;
+  let tokenProcessed = false;
   let closing: Promise<void> | undefined;
   return {
     lifetimeFenceCandidates: lease.lifetimeFenceCandidates,
@@ -49,7 +51,7 @@ export async function stageManagedAntigravityCredential(input: {
     close() {
       if (closed) return Promise.resolve();
       return closing ??= (async () => {
-        if (canonical && (input.retainRefresh?.() ?? true)) {
+        if (canonical && !tokenProcessed) {
           const handle = await open(token, constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
             const stat = await handle.stat();
@@ -65,11 +67,21 @@ export async function stageManagedAntigravityCredential(input: {
               }
               if (size > 65_536) throw new Error("Antigravity refreshed credential exceeds its bound");
               const refreshed = sanitizeAntigravityCredential(buffer.subarray(0, size).toString("utf8"));
-              await rm(`${refresh}.tmp`, { force: true });
-              await writeFile(`${refresh}.tmp`, refreshed, { flag: "wx", mode: 0o600 });
-              await rename(`${refresh}.tmp`, refresh);
+              // Failed/cancelled startup can still consume a refresh token.
+              // Admission controls retaining an unchanged copy, never rotation.
+              if (refreshed !== canonical || (input.retainRefresh?.() ?? true)) {
+                await rm(`${refresh}.tmp`, { force: true });
+                const handoff = await open(`${refresh}.tmp`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+                try { await handoff.writeFile(refreshed); await handoff.sync(); } finally { await handoff.close(); }
+                await rename(`${refresh}.tmp`, refresh);
+                const parent = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+                try { await parent.sync(); } finally { await parent.close(); }
+              }
             } finally { buffer.fill(0); await rm(`${refresh}.tmp`, { force: true }); }
           } finally { await handle.close(); }
+          // A failed underlying lease close must retry that same lease without
+          // reopening the token removed only after this durable handoff.
+          tokenProcessed = true;
         }
         await rm(token, { force: true });
         await rm(join(directory, "logs"), { recursive: true, force: true });

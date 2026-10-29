@@ -19,7 +19,7 @@ export function antigravityInstructionBinding(content: string) {
 
 export function assertAntigravityPromptPolicy(content: string): void {
   // Native slash commands can alter account/configuration before inference.
-  if (content.trimStart().startsWith("/")) throw new AntigravityAdmissionError("native slash commands are unavailable in a managed task");
+  if (content.split(/\r\n|\r|\n/u).some(line => line.trimStart().startsWith("/"))) throw new AntigravityAdmissionError("native slash commands are unavailable in a managed task");
 }
 
 /** No saved ACPX record can substitute for this actual connection's receipt. */
@@ -75,6 +75,7 @@ export function createAntigravityAdmission(content: string, model: string) {
               state.sessionId = null;
               sessions.clear();
               nativeSelection.clear();
+              questions.clear();
               if (pending.has(id as string | number) || pending.size >= 128) fail("duplicate or excessive native admission requests");
               pending.set(id as string | number, { method, nonce, ...(typeof params.sessionId === "string" ? { sessionId: params.sessionId } : {}) });
             } else if (method === "session/prompt") {
