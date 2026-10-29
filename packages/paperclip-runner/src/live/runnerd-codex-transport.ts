@@ -1395,7 +1395,7 @@ export interface CapabilityRunnerdCodexTransport {
   /** Relinquish controller authority without stopping the durable runner. */
   detachControllerForRestart(): Promise<void>;
   /** Setup-only retained cleanup; joins original work and proves physical retirement. */
-  retireProbeResources?(): Promise<void>;
+  retireProbeResources?(timeoutMs?: number): Promise<void>;
 }
 
 export type RunnerdCodexTransport = CapabilityRunnerdCodexTransport;
@@ -4564,18 +4564,21 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
     return this.#closePromise;
   }
 
-  retireProbeResources(): Promise<void> {
-    return this.#probeRetirement ??= (async () => {
+  retireProbeResources(timeoutMs?: number): Promise<void> {
+    if (this.#probeRetirement) return this.#probeRetirement;
+    const operation = (async () => {
+      const deadline = Date.now() + probeCleanupBudget(timeoutMs);
       // Cancellation/timeouts revoke admission but cannot cancel an in-flight
       // filesystem request, registration, or child spawn. Join those originals.
-      await Promise.allSettled([this.#startupOperation, this.#attachmentOperation]);
-      await this.#closePromise?.catch(() => undefined);
+      await awaitProbeCleanup(Promise.allSettled([this.#startupOperation, this.#attachmentOperation]), deadline, "joining the original launch");
+      if (this.#closePromise) await awaitProbeCleanup(this.#closePromise.catch(() => undefined), deadline, "joining the original close");
       const handle = this.#handle;
       if (handle) {
-        await waitForProcess(handle, 1_000).catch(() => undefined);
-        try { await handle.completion; }
+        // Close already exercised the original owner's signal authority. Proof
+        // must never dispatch another signal using a possibly reused PID/group.
+        try { await awaitProbeCleanup(handle.completion, deadline, "waiting for the original child exit"); }
         catch (error) { if (handle.child.pid !== undefined) throw error; }
-        while (handle.isExitConfirmed?.() === false) await new Promise(resolve => setTimeout(resolve, 1_000));
+        await awaitProbeProof(() => handle.isExitConfirmed?.() !== false, deadline, "confirming the original owner exit");
       }
       // A remote owner must explicitly prove its own process retirement. An
       // absent local handle or a dispatched remote signal is not that proof.
@@ -4584,13 +4587,17 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       }
       this.#pumpEventsSafely();
       const pids = [...new Set([this.#evidence.runnerPid, this.#evidence.sidecarPid, this.#evidence.agentPid, this.#evidence.providerPid])].filter((pid): pid is number => pid !== null);
-      while (!pids.every(maintenanceProcessAbsent)) await new Promise(resolve => setTimeout(resolve, 1_000));
+      if (pids.length && process.platform === "win32") throw new Error("Native probe platform process retirement remains unconfirmed");
+      await awaitProbeProof(() => pids.every(maintenanceProcessAbsent), deadline, "confirming recorded process absence");
       if (this.options.provider === "acpx" && this.options.acpxAgent === "antigravity") {
         const sessionId = this.#eventIdentity?.normalizedSessionId ?? this.options.prpIdentity?.normalizedSessionId;
-        if (sessionId) await confirmAntigravityProbeNativeRetirement(this.options.acpxRuntimeDirectory ?? resolve(this.#root, "acpx"), sessionId);
+        if (sessionId) await awaitProbeCleanup(confirmAntigravityProbeNativeRetirement(this.options.acpxRuntimeDirectory ?? resolve(this.#root, "acpx"), sessionId), deadline, "confirming the original Google owner retirement");
         else if (handle?.child.pid !== undefined) throw new Error("Native probe credential lifetime is unidentified");
       }
     })();
+    this.#probeRetirement = operation;
+    void operation.catch(() => { if (this.#probeRetirement === operation) this.#probeRetirement = null; });
+    return operation;
   }
 
   detachControllerForRestart(): Promise<void> {
@@ -7443,14 +7450,32 @@ export function createCapabilityRunnerdCodexTransport(
     transport,
     evidence: () => transport.evidence(),
     detachControllerForRestart: () => transport.detachControllerForRestart(),
-    retireProbeResources: () => transport.retireProbeResources(),
+    retireProbeResources: timeoutMs => transport.retireProbeResources(timeoutMs),
   };
 }
 
 export const createRunnerdCodexTransport =
   createCapabilityRunnerdCodexTransport;
 
-const retainedNativeProbeCleanups = new Set<Promise<void>>();
+const retainedNativeProbeCleanups = new Set<{ run: () => Promise<void> }>();
+
+function probeCleanupBudget(timeoutMs = 10_000): number {
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, 10_000) : 10_000;
+}
+async function awaitProbeCleanup<T>(pending: Promise<T>, deadline: number, detail: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([pending, new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error(`Native probe retirement timed out while ${detail}; recovery state retained.`)), Math.max(0, deadline - Date.now()));
+    })]);
+  } finally { clearTimeout(timeout); }
+}
+async function awaitProbeProof(proven: () => boolean, deadline: number, detail: string): Promise<void> {
+  while (!proven()) {
+    if (Date.now() >= deadline) throw new Error(`Native probe retirement remains unconfirmed while ${detail}; recovery state retained.`);
+    await new Promise(resolve => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+  }
+}
 
 export class NativeEnvironmentProbeCleanupError extends AggregateError {
   readonly code = "NATIVE_ENVIRONMENT_PROBE_CLEANUP_PENDING";
@@ -7458,6 +7483,7 @@ export class NativeEnvironmentProbeCleanupError extends AggregateError {
     readonly retired: Promise<void>,
     readonly operationError: unknown,
     readonly cleanupErrors: readonly unknown[],
+    readonly retryCleanup?: () => Promise<void>,
   ) {
     const errors = [...(operationError === undefined ? [] : [operationError]), ...cleanupErrors];
     super(errors, errors.map(error => error instanceof Error ? error.message : "Native probe cleanup failed.").join("; "), { cause: operationError ?? cleanupErrors[0] });
@@ -7465,10 +7491,22 @@ export class NativeEnvironmentProbeCleanupError extends AggregateError {
   }
 }
 
-function retainNativeProbeCleanup(operation: Promise<void>): Promise<void> {
-  retainedNativeProbeCleanups.add(operation);
-  void operation.then(() => retainedNativeProbeCleanups.delete(operation), () => undefined);
-  return operation;
+function retainNativeProbeCleanup(cleanup: (retry: boolean) => Promise<void>) {
+  let operation: Promise<void> | undefined;
+  let attempts = 0;
+  const owner = { run: (): Promise<void> => {
+    if (operation) return operation;
+    const retry = attempts++ > 0;
+    operation = Promise.resolve().then(() => cleanup(retry)).then(() => {
+      retainedNativeProbeCleanups.delete(owner);
+    }, error => { operation = undefined; throw error; });
+    // The HTTP caller may retain only the error, without awaiting retirement.
+    // Keep awaited failures observable while preventing detached rejections.
+    void operation.catch(() => undefined);
+    return operation;
+  } };
+  retainedNativeProbeCleanups.add(owner);
+  return { retired: owner.run(), retryCleanup: owner.run };
 }
 
 export async function probeNativeRunnerEnvironment(options: {
@@ -7480,6 +7518,8 @@ export async function probeNativeRunnerEnvironment(options: {
   admissionOnly?: boolean;
   environment: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  /** A finite cleanup budget, capped at the ordinary ten-second boundary. */
+  cleanupTimeoutMs?: number;
   workingDirectory?: string;
   transportOptions?: CapabilityRunnerdCodexTransportOptions;
   onCodexCredentialRefresh?: (filename: string) => Promise<void>;
@@ -7502,9 +7542,20 @@ export async function probeNativeRunnerEnvironment(options: {
   let registrationTeardownError: unknown;
   let registrationOperation: Promise<unknown> | undefined;
   let registrationReleaseOperation: Promise<void> | undefined;
+  let registrationReleaseFailed = false;
+  let releaseRegistration: (() => Promise<void>) | undefined;
   let cleanupCallbackOperation: Promise<void> | undefined;
+  let cleanupCallbackFailed = false;
   let credentialRefreshOperation: Promise<void> | undefined;
+  let credentialRefreshFailed = false;
+  const preserveCredentialRefresh = (retry = false) => {
+    if (retry && credentialRefreshFailed) { credentialRefreshOperation = undefined; credentialRefreshFailed = false; }
+    return credentialRefreshOperation ??= Promise.resolve()
+      .then(() => options.onCodexCredentialRefresh?.(resolve(remoteFilesystemRoot ?? options.runtimeDirectory, "codex-home", "auth.json")))
+      .catch(error => { credentialRefreshFailed = true; throw error; });
+  };
   let registrationCleanupConfirmed = true;
+  const cleanupBudget = probeCleanupBudget(options.cleanupTimeoutMs);
   const sourceCodexHome = ownsPreparation ? undefined : options.transportOptions?.sourceCodexHome ?? resolveSourceCodexHome(environment);
   delete environment.PAPERCLIP_RUNNER_EXTERNAL_SANDBOX;
   if (!ownsPreparation) {
@@ -7523,9 +7574,11 @@ export async function probeNativeRunnerEnvironment(options: {
         const release = () => registrationReleaseOperation ??= Promise.resolve()
           .then(() => registration.release())
           .then(() => { registrationCleanupConfirmed = true; }, error => {
+            registrationReleaseFailed = true;
             registrationTeardownError = error;
             throw error;
           });
+        releaseRegistration = release;
         if (controller.signal.aborted) {
           await release();
           controller.signal.throwIfAborted();
@@ -7546,7 +7599,7 @@ export async function probeNativeRunnerEnvironment(options: {
     externallySandboxed: options.transportOptions?.externallySandboxed === true,
     disableCodexProjectInstructions: true,
     disableCodexWebSearch: options.provider === "codex",
-    closeGraceMs: 10_000,
+    closeGraceMs: cleanupBudget,
     lifecyclePolicy: { mode: "per_turn", idleTimeoutMs: null },
   });
   const driver = new CodexAppServerDriver({
@@ -7631,7 +7684,7 @@ export async function probeNativeRunnerEnvironment(options: {
     clearTimeout(timer);
     controller.abort(failure ?? new Error("Native provider hello probe complete."));
     const teardownErrors: unknown[] = [];
-    const teardownDeadline = Date.now() + 10_000;
+    const teardownDeadline = Date.now() + cleanupBudget;
     const awaitTeardown = async (pending: Promise<unknown>, detail: string): Promise<void> => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -7658,27 +7711,34 @@ export async function probeNativeRunnerEnvironment(options: {
     if (!registrationCleanupConfirmed) teardownErrors.push(new Error("Native setup probe authority release is unconfirmed; recovery state retained."));
     if (bundle.evidence().runnerPid !== null && bundle.evidence().runnerExited && options.provider === "codex" && options.onCodexCredentialRefresh) {
       try {
-        credentialRefreshOperation = options.onCodexCredentialRefresh(resolve(remoteFilesystemRoot ?? options.runtimeDirectory, "codex-home", "auth.json"));
-        await awaitTeardown(credentialRefreshOperation, "preserving credential refresh");
+        await awaitTeardown(preserveCredentialRefresh(), "preserving credential refresh");
       }
       catch (error) { teardownErrors.push(error); }
     }
-    const confirmCleanup = () => cleanupCallbackOperation ??= Promise.resolve().then(() => options.onCleanupConfirmed?.());
+    const confirmCleanup = (retry = false) => {
+      if (retry && cleanupCallbackFailed) { cleanupCallbackOperation = undefined; cleanupCallbackFailed = false; }
+      return cleanupCallbackOperation ??= Promise.resolve().then(() => options.onCleanupConfirmed?.())
+        .catch(error => { cleanupCallbackFailed = true; throw error; });
+    };
     if (!teardownErrors.length && options.onCleanupConfirmed) {
       try { await awaitTeardown(confirmCleanup(), "confirming credential handoff"); }
       catch (error) { teardownErrors.push(error); }
     }
     if (teardownErrors.length) {
-      const retired = retainNativeProbeCleanup((async () => {
-        await Promise.allSettled([operation, closingOperation, registrationOperation]);
+      const retained = retainNativeProbeCleanup(async retry => {
+        const deadline = Date.now() + cleanupBudget;
+        await awaitProbeCleanup(Promise.allSettled([operation, closingOperation, registrationOperation]), deadline, "joining original probe operations");
         if (!bundle.retireProbeResources) throw new Error("Native probe physical retirement proof is unavailable");
-        await bundle.retireProbeResources();
-        if (registrationReleaseOperation) await registrationReleaseOperation;
-        if (credentialRefreshOperation) await credentialRefreshOperation;
+        await awaitProbeCleanup(bundle.retireProbeResources(Math.max(1, deadline - Date.now())), deadline, "confirming physical retirement");
+        if (retry && registrationReleaseFailed) { registrationReleaseOperation = undefined; registrationReleaseFailed = false; }
+        if (!registrationCleanupConfirmed && releaseRegistration) await awaitProbeCleanup(releaseRegistration(), deadline, "releasing original probe authority");
+        if (bundle.evidence().runnerPid !== null && options.provider === "codex" && options.onCodexCredentialRefresh) {
+          await awaitProbeCleanup(preserveCredentialRefresh(retry), deadline, "preserving credential refresh");
+        }
         if (!registrationCleanupConfirmed) throw new Error("Native probe authority release remains unconfirmed");
-        await confirmCleanup();
-      })());
-      throw new NativeEnvironmentProbeCleanupError(retired, failure, teardownErrors);
+        await awaitProbeCleanup(confirmCleanup(retry), deadline, "confirming credential handoff");
+      });
+      throw new NativeEnvironmentProbeCleanupError(retained.retired, failure, teardownErrors, retained.retryCleanup);
     }
   }
   if (failure !== undefined) throw failure;

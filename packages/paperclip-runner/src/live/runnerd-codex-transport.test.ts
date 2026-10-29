@@ -3493,9 +3493,10 @@ it.each(["stuck", "late-release", "late-release-error", "stuck-release", "cooper
     let finishRelease!: () => void;
     const releasing = new Promise<void>(resolve => { finishRelease = resolve; });
     const releaseError = new Error("setup registration release failed");
+    let releaseFails = mode === "late-release-error";
     const release = vi.fn(async () => {
       if (mode === "stuck-release") await releasing;
-      if (mode === "late-release-error") throw releaseError;
+      if (releaseFails) throw releaseError;
     });
     const registered = {
       connection: { mode: "listen" as const, listenAddress: "127.0.0.1", listenPort: 43127, listenPath: "/setup-probe" },
@@ -3563,6 +3564,11 @@ it.each(["stuck", "late-release", "late-release-error", "stuck-release", "cooper
           await expect((failure as NativeEnvironmentProbeCleanupError).retired).rejects.toBe(releaseError);
           expect(cleanup).not.toHaveBeenCalled();
           expect((await stat(runtimeDirectory)).isDirectory()).toBe(true);
+          releaseFails = false;
+          await (failure as NativeEnvironmentProbeCleanupError).retryCleanup!();
+          expect(release).toHaveBeenCalledTimes(2);
+          expect(cleanup).toHaveBeenCalledOnce();
+          await expect(stat(runtimeDirectory)).rejects.toThrow();
         } else {
           await (failure as NativeEnvironmentProbeCleanupError).retired;
           expect(cleanup).toHaveBeenCalledOnce();
