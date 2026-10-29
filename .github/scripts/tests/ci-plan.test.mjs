@@ -88,6 +88,22 @@ test("shadow mode explains savings but runs every task; force overrides selectio
   }
 });
 
+test("cache-affecting definition changes force execution across successive PR pushes", () => {
+  for (const file of ["turbo.json", "package.json", "packages/db/package.json", "scripts/ci/run-task.mjs",
+    ".github/actions/run-ci-task/action.yml"]) {
+    for (const paths of [[file], [file, "packages/db/src/schema/issues.ts"]]) {
+      const result = plan(paths);
+      assert.match(result.forceReason, /Global CI input changed/);
+      assert.ok(Object.values(result.jobs).every((job) => job.selected === job.total));
+    }
+  }
+  const workflow = readFileSync(new URL(".github/workflows/pr-trusted.yml", root), "utf8");
+  assert.equal((workflow.match(/force:.*fromJSON\(needs.gate.outputs.plan\).forceReason != null/g) ?? []).length, 3);
+  const action = readFileSync(new URL(".github/actions/run-ci-task/action.yml", root), "utf8");
+  assert.match(action, /CI_FORCE_TASKS: \$\{\{ inputs.force \}\}/);
+  assert.equal((action.match(/if:.*inputs.force != 'true'/g) ?? []).length, 2);
+});
+
 test("task dependencies propagate input changes and unsupported graph syntax fails closed", () => {
   const fixture = { globalDependencies: [], tasks: {
     "//#build": { inputs: ["lib/**"] }, "//#test": { inputs: ["app/**"], dependsOn: ["//#build"] },

@@ -40,9 +40,10 @@ revision stamps or external state.
 Local evidence: repository typechecking and build passed. Planner tests cover
 real Git renames, missing/truncated comparisons, cross-package source reads,
 trusted definition downloads, full-suite overrides, and required-check failures.
-A real Turbo fixture proves result reuse, prerequisite-output restoration, source
-and environment invalidation, and failed-task retries. A repeated repository
-`ci:prepare` invocation restored its result from Turbo.
+A real Turbo fixture proves execution through the existing package scripts,
+result reuse and restoration, source and argument invalidation, environment
+invalidation, and failed-task retries. The execution adapter keeps task aliases
+out of package manifests.
 
 The planner selects 18 jobs for `ui/src/components/Sidebar.tsx`, compared with the
 existing 48. This is a job-count reduction; remote wall-clock savings have not

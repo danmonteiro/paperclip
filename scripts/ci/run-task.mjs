@@ -1,7 +1,8 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { matchesGlob } from "node:path";
+import { executionPlan } from "./execution-plan.mjs";
 
 const task = process.env.CI_TASK;
 if (!/^ci:[a-z-]+$/.test(task ?? "")) throw new Error("Invalid CI task");
@@ -12,6 +13,10 @@ const version = (command, argv) => {
   catch { return "unavailable"; }
 };
 const config = JSON.parse(readFileSync("turbo.json", "utf8"));
+const execution = executionPlan(config, task, args);
+mkdirSync(".turbo/task-configs", { recursive: true });
+const runtimeConfig = `.turbo/task-configs/${task.replace(":", "-")}.json`;
+writeFileSync(runtimeConfig, JSON.stringify(execution.config));
 const classified = [...config.globalDependencies, ...Object.values(config.tasks).flatMap((entry) => entry.inputs)];
 const unknownInputs = createHash("sha256");
 let uncacheable = false;
@@ -34,8 +39,10 @@ const scope = {
   unknownInputs: unknownInputs.digest("hex"),
 };
 const force = process.env.CI_FORCE_TASKS === "true" || uncacheable;
-const result = spawnSync("pnpm", ["exec", "turbo", "run", task, "--summarize", "--cache=local:rw", "--cache-dir=.turbo/cache",
-  ...(force ? ["--force"] : []), "--", ...args], {
+const result = spawnSync("pnpm", ["exec", "turbo", "run", execution.target,
+  "--root-turbo-json", runtimeConfig, "--summarize", "--cache=local:rw", "--cache-dir=.turbo/cache",
+  ...(process.env.CI_TASK_DRY_RUN === "true" ? ["--dry=json"] : []),
+  ...(force ? ["--force"] : []), "--", ...execution.args], {
   stdio: "inherit",
   env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1",
     CI_TASK_CACHE_SCOPE: createHash("sha256").update(JSON.stringify(scope)).digest("hex") },

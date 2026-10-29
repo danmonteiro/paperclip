@@ -52,17 +52,6 @@
     "SHELL"
   ],
   "tasks": {
-    "//#ci:prepare": {
-      "inputs": [
-        "packages/shared/**",
-        "packages/plugins/sdk/**"
-      ],
-      "outputs": [
-        "packages/shared/dist/**",
-        "packages/plugins/sdk/dist/**"
-      ],
-      "cache": true
-    },
     "//#ci:server": {
       "inputs": [
         "server/**",
@@ -78,10 +67,7 @@
         "ui/src/components/MarkdownBody.tsx"
       ],
       "outputs": [],
-      "cache": true,
-      "dependsOn": [
-        "//#ci:prepare"
-      ]
+      "cache": true
     },
     "//#ci:chat": {
       "inputs": [
@@ -98,10 +84,7 @@
         "ui/src/components/MarkdownBody.tsx"
       ],
       "outputs": [],
-      "cache": true,
-      "dependsOn": [
-        "//#ci:prepare"
-      ]
+      "cache": true
     },
     "//#ci:workspaces-a": {
       "inputs": [
@@ -111,10 +94,7 @@
         "ui/**"
       ],
       "outputs": [],
-      "cache": true,
-      "dependsOn": [
-        "//#ci:prepare"
-      ]
+      "cache": true
     },
     "//#ci:workspaces-b": {
       "inputs": [
@@ -125,20 +105,14 @@
         "ui/public/**"
       ],
       "outputs": [],
-      "cache": true,
-      "dependsOn": [
-        "//#ci:prepare"
-      ]
+      "cache": true
     },
     "//#ci:db": {
       "inputs": [
         "packages/**"
       ],
       "outputs": [],
-      "cache": true,
-      "dependsOn": [
-        "//#ci:prepare"
-      ]
+      "cache": true
     },
     "//#ci:serialized": {
       "inputs": [
@@ -155,10 +129,7 @@
         "ui/src/components/MarkdownBody.tsx"
       ],
       "outputs": [],
-      "cache": true,
-      "dependsOn": [
-        "//#ci:prepare"
-      ]
+      "cache": true
     },
     "//#ci:runner-static": {
       "inputs": [

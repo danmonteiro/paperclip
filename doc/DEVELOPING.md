@@ -176,6 +176,10 @@ code. The comparison covers the tested merge commit. Both rename paths count;
 failed, empty, malformed, or potentially truncated comparisons select the full
 suite. Unclassified files also select full CI. Stack verification retains the
 existing scope policy and runs all suites whenever that policy requires them.
+Changes to global inputs, including the task graph, package scripts, workflows,
+and execution helpers, force full execution and disable result-cache restore and
+save for the entire PR diff. Later pushes cannot reuse results created under
+changed cache definitions.
 
 The repository variable `CI_INCREMENTAL_MODE` accepts `enabled` (the default),
 `shadow` (report selections but execute everything), or `full`. Add the `full-ci`
@@ -186,8 +190,10 @@ in its job summary. Required aggregates reject failed, cancelled, and unexpected
 skipped selected suites; the verify aggregate includes serialized tests and the
 canary dry run.
 
-General and serialized test suites, the standalone Rust suite, and the shared/SDK
-build prerequisite use Turbo's content-addressed cache. GitHub Actions stores
+General and serialized test suites and the standalone Rust suite use Turbo's
+content-addressed cache. An execution adapter maps selected lanes to the existing
+package scripts and their declared inputs. The test scripts keep responsibility
+for their build prerequisites. GitHub Actions stores
 these results in the PR's own cache scope, so a later push can reuse unchanged
 tasks without giving PRs write access to master caches. Input hashes include
 the relevant source trees, fixtures, scripts, manifests, resolved lockfile,
@@ -197,7 +203,7 @@ Revision-stamped builds, registry smoke tests, browser suites, and Runner lanes
 that perform integration checks retain their original uncached commands. The
 post-merge release verification workflow continues to execute the full suite.
 
-Inspect a proposed selection locally with `pnpm ci:plan origin/master HEAD`.
+Inspect a proposed selection locally with `node .github/scripts/ci-plan.mjs origin/master HEAD`.
 Run the planner and workflow-contract tests with
 `node --test .github/scripts/tests/ci-plan.test.mjs`, and the real cache proof
 with `node --test scripts/ci/cache.integration.test.mjs` after installing dependencies.

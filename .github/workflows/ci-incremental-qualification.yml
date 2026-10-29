@@ -43,8 +43,22 @@ jobs:
           PAPERCLIP_CI_TEST_TURBO: ${{ runner.temp }}/ci-tools/node_modules/.bin/turbo
         run: node --test scripts/ci/cache.integration.test.mjs
       - name: Check the real repository task graph
+        env:
+          CI_TURBO_BIN: ${{ runner.temp }}/ci-tools/node_modules/.bin/turbo
         run: |
-          "$RUNNER_TEMP/ci-tools/node_modules/.bin/turbo" run ci:server ci:db ci:runner-rust --dry=json --cache-dir=.turbo/cache > "$RUNNER_TEMP/ci-task-graph.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { executionPlan } from './scripts/ci/execution-plan.mjs';
+          const config = JSON.parse(readFileSync('turbo.json', 'utf8'));
+          for (const task of ['ci:server', 'ci:db', 'ci:runner-rust']) {
+            const plan = executionPlan(config, task, []);
+            const file = process.env.RUNNER_TEMP + '/ci-task-config.json';
+            writeFileSync(file, JSON.stringify(plan.config));
+            execFileSync(process.env.CI_TURBO_BIN, ['run', plan.target, '--root-turbo-json', file,
+              '--dry=json', '--cache-dir=.turbo/cache', '--', ...plan.args]);
+          }
+          NODE
       - name: Explain this pull request's plan
         env:
           CI_INCREMENTAL_MODE: shadow

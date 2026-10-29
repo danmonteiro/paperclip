@@ -53,6 +53,7 @@ export function planTasks({ config, lanes, paths, mode = "enabled", forceReason 
   if (!changed.length || changed.some((file) => !validPath(file))) forceReason ??= "Missing or invalid diff";
   const matches = (file, globs) => globs.some((glob) => matchesGlob(file, glob));
   const globalChanges = changed.filter((file) => matches(file, config.globalDependencies));
+  if (globalChanges.length) forceReason ??= `Global CI input changed: ${globalChanges[0]}`;
   const unknown = changed.filter((file) => !releaseNote.test(file)
     && !matches(file, config.globalDependencies) && ![...inputs.values()].some((globs) => matches(file, globs)));
   if (unknown.length) forceReason ??= `Unclassified path: ${unknown[0]}`;
