@@ -87,9 +87,9 @@ vi.mock("./installation-integrity.js", () => ({ verifyNativeAcpxInstallation: vi
 
 describe("Copilot build-owned installation", () => {
   it("admits the current profile with environment launch preparation", () => {
-    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(86);
+    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(87);
     expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBeUndefined();
-    expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toBe("sha256:fffb7f39e3b1754c604d05cbef5da8a150fb3c508a0e564a459955cd03b9b538");
+    expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toBe("sha256:34510fbd6469e4375c898b7afa56aafb5df91e1f13925dc8556a3694b5123245");
   });
 
 it("preserves published v65 while binding retained-maintenance waits in v66", async () => {
@@ -154,14 +154,14 @@ it("preserves the historical sleep-maintenance v64 identity", async () => {
       agentProfileVersion: 79, commandDigest: prior.commandDigest })).rejects.toThrow("exact pinned");
   });
 
-  it("preserves profile 85 while binding bounded tool identities in profile 86", () => {
-    const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v85-identity.json", import.meta.url), "utf8"));
-    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v86-identity.json", import.meta.url), "utf8"));
+  it("preserves profile 86 while binding cleanup recovery identity in profile 87", () => {
+    const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v86-identity.json", import.meta.url), "utf8"));
+    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v87-identity.json", import.meta.url), "utf8"));
     expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual([
-      "agentProfileVersion", "profileCompatibilitySourceSha256", "semanticBridgeSourceSha256",
+      "agentProfileVersion", "nativeSessionContractSourceSha256", "nativeSessionRuntimeSourceSha256", "profileCompatibilitySourceSha256",
     ]);
     expect(Object.keys(current.declaration).sort()).toEqual(Object.keys(prior.declaration).sort());
-    expect(isSupportedAcpxProfileVersion("copilot", 85)).toBe(true);
+    expect(isSupportedAcpxProfileVersion("copilot", 86)).toBe(true);
   });
 
   it("retains the published profile 75 fixture while advancing the event contract", async () => {
