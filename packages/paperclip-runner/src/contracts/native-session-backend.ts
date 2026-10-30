@@ -177,7 +177,7 @@ export class NativeSessionCleanupQuarantinedError extends Error {
 
   constructor() {
     super(
-      "native_session_cleanup_quarantined: this Issue's prior session requires cleanup. An authorized operator can call POST /api/issues/{issueId}/recovery-actions/retry-native-session-cleanup with the exact failed runId; this makes one close attempt and never replays the task turn. If no retained session owner is found, verify process-stop evidence through the normal recovery path. Clearing a task session does not resolve this quarantine.",
+      "native_session_cleanup_quarantined: this Issue's prior session requires cleanup. An authorized operator can call POST /api/issues/{issueId}/recovery-actions/retry-native-session-cleanup with the exact failed runId; it runs bounded cleanup reconciliation and retires the hold only when process, session, and ownership evidence match. It never retries the task turn. If evidence is missing, follow the returned wait state or inspect that exact run; clearing a task session does not resolve this quarantine.",
     );
     this.name = "NativeSessionCleanupQuarantinedError";
   }

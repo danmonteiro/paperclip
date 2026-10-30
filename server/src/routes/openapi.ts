@@ -10916,7 +10916,7 @@ registerCurrentRoute({
   method: "post",
   path: "/api/issues/{id}/recovery-actions/retry-native-session-cleanup",
   tags: ["issues"],
-  summary: "Retry cleanup for the exact quarantined native session without replaying its task turn",
+  summary: "Reconcile cleanup for the exact quarantined native session without retrying its task turn",
   body: retryNativeSessionCleanupSchema,
   responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict },
 });

@@ -428,7 +428,7 @@ beforeEach(() => {
 });
 
 describe("operator native session cleanup recovery", () => {
-  it("retries cleanup only for the exact terminal native run owner", async () => {
+  it("routes the exact terminal failed run through retained cleanup reconciliation, never provider retry", async () => {
     const run = {
       id: "cleanup-run",
       companyId: "cleanup-company",
@@ -447,23 +447,19 @@ describe("operator native session cleanup recovery", () => {
     };
     query.from.mockReturnValue(query);
     query.where.mockReturnValue(query);
-    const db = { select: vi.fn(() => query) } as unknown as Db;
+    const failure = new Error("cleanup reconciliation must inspect the retained evidence");
+    const transaction = vi.fn().mockRejectedValue(failure);
+    const db = { select: vi.fn(() => query), transaction } as unknown as Db;
 
     await expect(retryNativeSessionCleanupForRun(db, {
       companyId: run.companyId,
       issueId: run.issueId,
       runId: run.id,
-    })).resolves.toBe("settled");
+    })).rejects.toBe(failure);
 
     expect(query.limit).toHaveBeenCalledWith(1);
-    expect(state.retryCleanup).toHaveBeenCalledWith({
-      companyId: run.companyId,
-      issueId: run.issueId,
-      runId: run.id,
-      sessionId: run.sessionId,
-      agentId: run.agentId,
-      runnerInstanceId: run.runnerInstanceId,
-    });
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(state.retryCleanup).not.toHaveBeenCalled();
   });
 
   it("does not retry cleanup for a non-terminal run", async () => {
@@ -490,7 +486,7 @@ describe("operator native session cleanup recovery", () => {
       companyId: "cleanup-company",
       issueId: "cleanup-issue",
       runId: "cleanup-run",
-    })).resolves.toBe("not_eligible");
+    })).resolves.toEqual({ status: "not_eligible", runId: "cleanup-run" });
     expect(state.retryCleanup).not.toHaveBeenCalled();
   });
 });

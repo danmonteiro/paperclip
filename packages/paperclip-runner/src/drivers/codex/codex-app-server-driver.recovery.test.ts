@@ -62,27 +62,23 @@ function cursorProviderIdentity(mode: unknown) {
 }
 
 describe("Codex app-server Codex driver", () => {
-  it("retries cleanup by verifying and closing the exact idle thread without resuming it", async () => {
-    const transport = new FakeCodexTransport("thread-cleanup", "provider-cleanup");
-    transport.readResponse = { thread: { id: "thread-cleanup", sessionId: "provider-cleanup", cwd: WORKSPACE,
-      turns: [{ id: "turn-done", status: "failed", items: [] }] } };
-    const close = vi.spyOn(transport, "close");
-    const driver = makeDriver([transport]);
-    await driver.retryCleanup!({ driverKind: "codex_app_server", driverSessionId: "thread-cleanup",
-      providerSessionId: "provider-cleanup", runId: "run-cleanup", normalizedSessionId: "session-cleanup",
-      activeTurnId: null, pendingRuntimeRequests: [], terminalTurns: [{ turnId: "turn-done", fingerprint: "{}" }] });
-    expect(transport.calls.map(call => call.method)).toContain("thread/read");
-    expect(transport.calls.map(call => call.method)).not.toContain("thread/resume");
-    expect(transport.calls.map(call => call.method)).not.toContain("turn/start");
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("refuses cleanup retry if the saved provider session still has an active turn", async () => {
+  it("refuses cleanup retries that could restore a provider", async () => {
     const transport = new FakeCodexTransport("thread-cleanup", "provider-cleanup");
     const driver = makeDriver([transport]);
     await expect(driver.retryCleanup!({ driverKind: "codex_app_server", driverSessionId: "thread-cleanup",
       providerSessionId: "provider-cleanup", runId: "run-cleanup", normalizedSessionId: "session-cleanup",
-      activeTurnId: "turn-active", pendingRuntimeRequests: [], terminalTurns: [] })).rejects.toThrow(/idle provider session/);
+      activeTurnId: null, pendingRuntimeRequests: [], terminalTurns: [{ turnId: "turn-done", fingerprint: "{}" }] }))
+      .rejects.toThrow("retained native session reconciliation");
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it("does not inspect or restore a provider when refusing cleanup retries", async () => {
+    const transport = new FakeCodexTransport("thread-cleanup", "provider-cleanup");
+    const driver = makeDriver([transport]);
+    await expect(driver.retryCleanup!({ driverKind: "codex_app_server", driverSessionId: "thread-cleanup",
+      providerSessionId: "provider-cleanup", runId: "run-cleanup", normalizedSessionId: "session-cleanup",
+      activeTurnId: "turn-active", pendingRuntimeRequests: [], terminalTurns: [] }))
+      .rejects.toThrow("retained native session reconciliation");
     expect(transport.calls).toHaveLength(0);
   });
 

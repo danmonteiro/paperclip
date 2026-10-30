@@ -9777,7 +9777,7 @@ export function issueRoutes(
     const decision = await access.decide({ actor: req.actor, action: "runtime:manage", resource: { type: "company", companyId: issue.companyId } });
     if (!decision.allowed) throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
     const { retryNativeSessionCleanupForRun } = await import("../services/native-runtime/native-session-executor.js");
-    const status = await retryNativeSessionCleanupForRun(db, {
+    const outcome = await retryNativeSessionCleanupForRun(db, {
       companyId: issue.companyId,
       issueId: issue.id,
       runId: req.body.runId,
@@ -9795,13 +9795,18 @@ export function issueRoutes(
       entityId: req.body.runId,
       issueId: issue.id,
       details: {
-        cleanupStatus: status,
+        cleanupStatus: outcome.status,
+        ...(outcome.status === "deferred" ? {
+          cleanupWaitFor: outcome.waitFor,
+          ...(outcome.waitFor === "lease_expiry" ? { retryAt: outcome.retryAt.toISOString() } : {}),
+        } : {}),
         taskTurnReplayed: false,
         taskRetried: false,
       },
     });
-    if (status !== "settled") {
-      throw conflict(`Native session cleanup retry was not completed (${status}). The task turn was not retried; inspect the exact run and process evidence before any further recovery.`);
+    if (outcome.status !== "settled") {
+      const wait = outcome.status === "deferred" ? `; wait for ${outcome.waitFor}` : "";
+      throw conflict(`Native session cleanup remains ${outcome.status}${wait}. The task turn was not retried; inspect the exact run and process evidence before any further recovery.`);
     }
     logger.info({ companyId: issue.companyId, issueId: issue.id, runId: req.body.runId, actorId: actor.actorId },
       "Operator settled exact quarantined native session cleanup");
