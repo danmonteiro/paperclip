@@ -9805,8 +9805,22 @@ export function issueRoutes(
       },
     });
     if (outcome.status !== "settled") {
-      const wait = outcome.status === "deferred" ? `; wait for ${outcome.waitFor}` : "";
-      throw conflict(`Native session cleanup remains ${outcome.status}${wait}. The task turn was not retried; inspect the exact run and process evidence before any further recovery.`);
+      const wait = outcome.status === "deferred"
+        ? `; wait for ${outcome.waitFor}${outcome.waitFor === "lease_expiry" ? ` until ${outcome.retryAt.toISOString()}` : ""}`
+        : "";
+      throw conflict(
+        `Native session cleanup remains ${outcome.status}${wait}. The task turn was not retried; inspect the exact run and process evidence before any further recovery.`,
+        {
+          runId: outcome.runId,
+          status: outcome.status,
+          ...(outcome.status === "deferred" ? {
+            waitFor: outcome.waitFor,
+            ...(outcome.waitFor === "lease_expiry" ? { retryAt: outcome.retryAt.toISOString() } : {}),
+          } : {}),
+          taskTurnReplayed: false,
+          taskRetried: false,
+        },
+      );
     }
     logger.info({ companyId: issue.companyId, issueId: issue.id, runId: req.body.runId, actorId: actor.actorId },
       "Operator settled exact quarantined native session cleanup");

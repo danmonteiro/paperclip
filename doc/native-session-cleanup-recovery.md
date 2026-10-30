@@ -41,17 +41,20 @@ cleanup hold.
   Review the saved run and reconcile any pending or uncertain external effects
   through their own recovery procedures. Use the ordinary Issue Retry action
   only after those effects are understood.
-- `409` with a deferred status means wait for the reported `waitFor` condition
-  (`process_exit`, `session_release`, `environment_release`,
-  `maintenance_settlement`, or `lease_expiry`; the latter includes `retryAt`).
+- Every `409` includes `details.runId`, `details.status`,
+  `details.taskTurnReplayed: false`, and `details.taskRetried: false`.
+- For `details.status: "deferred"`, wait for the reported `details.waitFor`
+  condition (`process_exit`, `session_release`, `environment_release`,
+  `maintenance_settlement`, or `lease_expiry`). A `lease_expiry` response also
+  includes its ISO timestamp as `details.retryAt` and in the error message.
   Do not clear the lease, process record, session, checkpoint, or quarantine to
   force eligibility. Retry this exact cleanup action only after the named
   condition has resolved.
-- `409` with `not_eligible` means this run does not satisfy the supported
-  identity/state contract. `operator_required` means a maintenance attempt
-  could not prove a safe settlement. Preserve all evidence and escalate for
-  investigation; do not use a generic restart, delete retained state, or
-  replay the task turn.
+- `details.status: "not_eligible"` means this run does not satisfy the
+  supported identity/state contract. `details.status: "operator_required"`
+  means a maintenance attempt could not prove a safe settlement. Preserve all
+  evidence and escalate for investigation; do not use a generic restart,
+  delete retained state, or replay the task turn.
 
 Every attempt is activity-logged against the Issue and exact run, including its
 outcome and the invariant that the task turn was not replayed.
