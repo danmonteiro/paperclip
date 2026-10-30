@@ -18,26 +18,41 @@ Content-Type: application/json
 {"runId":"<exact failed run id>"}
 ```
 
-This action does not retry the task turn, open or resume a provider, clear a
-checkpoint, or infer the result of a provider tool call. It is deliberately
-narrow: it accepts only an exact terminal native run with retained run/session
-identity, a committed finalization and accepted result, and the supported local
-Codex runner state. It requires proof that the original process is gone and
-that no active session, environment lease, or maintenance owner still controls
-the state. The current retained-state reconciler rejects Windows and requires
-the exact supported POSIX Codex runner state. Missing,
-ambiguous, changed, unsupported, or contradictory evidence fails closed.
+This is a cleanup-only reconciliation. It never replays the task turn or
+delegates a semantic tool call. To settle the exact retained Codex turn, the
+reconciler stages an isolated copy of its state and may start a maintenance
+runner that reconnects to that provider session, requests stop when needed,
+drains its retained control events, and proves suspension. The original
+quarantine remains preserved until that proof succeeds. This is not a general
+provider restart or a way to continue the task.
 
-When eligible, Paperclip inspects and reconciles the retained state through an
-isolated maintenance copy while preserving the original quarantine and saved
-run result. Only after verifying the reconciled state does it retire the exact
-cleanup hold.
+Eligibility is intentionally narrow. The Issue and run IDs must match an exact
+terminal native run with retained session and runner identities. The supported
+failure is the local Codex runner failure `provider_transport_failed: runner
+did not durably suspend before checkpoint` (recorded as
+`adapter_failed` or `provider_transport_failed`). The persisted runner PID and
+process group must match, and both the original runner and provider processes
+must be proven absent. Paperclip also requires a committed finalization, an
+accepted saved result, no active session or environment lease, and retained
+state whose run, session, provider turn, and process identities match the
+saved events. Pending semantic tool inputs or any missing, ambiguous, changed,
+unsupported, or contradictory evidence fail closed. The reconciler currently
+rejects Windows and requires the supported POSIX Codex state.
+
+Older quarantines that lack these identities are not eligible. They return
+`not_eligible`; preserve their state and use the returned `nextAction` to
+investigate the exact run. Do not use this action as a generic unblock.
+
+When eligible, Paperclip reconciles a staged copy while preserving the
+original quarantine and saved run result. Only after verifying the reconciled
+state does it retire the exact cleanup hold.
 
 ### Interpret the response
 
-- `200` with `status: "settled"` means the exact cleanup reconciliation passed
-  its evidence checks and the cleanup hold was retired. It does not mean the
-  Issue was retried or that external effects from the failed run were undone.
+- `200` with `status: "settled"` means the exact retained turn was stopped and
+  durably suspended through the cleanup-only maintenance flow, its state was
+  verified, and the cleanup hold was retired. It does not mean the Issue was
+  retried or that external effects from the failed run were undone.
   Review the saved run and reconcile any pending or uncertain external effects
   through their own recovery procedures. Use the ordinary Issue Retry action
   only after those effects are understood.
