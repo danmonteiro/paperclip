@@ -5582,7 +5582,7 @@ describe("retained native cleanup activation", () => {
       }
       if (succeeds && mode === "not_dispatched_archive") {
         await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(coordinator.recoveryHistory.map((entry: Record<string, unknown>) => entry.phase)).toEqual(["prepared", "archived", "settled"]);
+        expect((coordinator.recoveryHistory as Array<Record<string, unknown>>).map(entry => entry.phase)).toEqual(["prepared", "archived", "settled"]);
         expect(state.cleanup).not.toHaveBeenCalled();
         expect(state.retireCleanup).toHaveBeenCalledTimes(1);
         await expect(assertRetainedNativeSourceArchiveSettled(db as unknown as Db, {

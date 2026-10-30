@@ -9377,6 +9377,7 @@ async function executePaperclipNativeSessionWithinScope(
             // projects remoteCwd into the provider execution boundary.
             execution: input.execution,
             runnerInstanceId: effectiveRunnerInstanceId,
+            appendSemanticToolInputEvidence: event => controlPlane.appendSemanticToolInputEvidence(event),
             pluginTaskDescription,
             retainedPluginTaskOwner: existingWarmSession ? pluginTaskSessionOwners.get(existingWarmSession) : undefined,
             durableEnvironmentLeaseId: durableRunnerBinding?.environmentLeaseId,
@@ -9407,6 +9408,7 @@ async function executePaperclipNativeSessionWithinScope(
           nativeSessionConfigDigest(remoteWarmRecovery.previousExecution, "remote"), await recovered.session.snapshot());
         persistedWarmSession = loadWarmNativeCheckpoint(input.execution, warmConfigDigest!, "remote");
         runnerdBackend = await createRunnerdBackend({ ...input, runnerInstanceId: effectiveRunnerInstanceId,
+          appendSemanticToolInputEvidence: event => controlPlane.appendSemanticToolInputEvidence(event),
           controllerPersistence: input.runnerExecutionTarget?.kind === "remote" ? { bootId: controller.bootId } : undefined,
           durableEnvironmentLeaseId: durableRunnerBinding?.environmentLeaseId, trace, toolTrace });
       }
@@ -12062,6 +12064,7 @@ export async function createRunnerdBackend(input: {
   managedAiAccountIdentity?: string;
   managedAiCredentialWriteback?: PluginTaskCredentialWritebackBinding;
   onTaskDispatched?: () => Promise<void> | void;
+  appendSemanticToolInputEvidence?: (event: PrpEvent) => Promise<void>;
   runnerExecutionTarget?: AdapterExecutionTarget | null;
   /** Resolved per-run authorization; not an independent instance setting. */
   runnerIngressAuthorized?: boolean;
@@ -12483,7 +12486,8 @@ async function createRunnerdBackendWithinSessionClaim(
         recordTimingReceipt: process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ? recordRunnerTimingReceipt : undefined,
         ...owner.driver, runnerArtifact: input.controllerPersistence?.runnerArtifact ?? description.runner,
         onSemanticToolInputCommitted: async event => {
-          await controlPlane.appendSemanticToolInputEvidence(event);
+          if (!input.appendSemanticToolInputEvidence) throw new Error("native_semantic_input_evidence_persistence_unavailable");
+          await input.appendSemanticToolInputEvidence(event);
         },
         controlPlaneRegistration: input.controllerPersistence ? async (authority, identity, signal) => {
           await nativeRunnerCheckpointRegistration({
@@ -13979,7 +13983,8 @@ async function createRunnerdBackendWithinSessionClaim(
           event,
         }),
         onSemanticToolInputCommitted: async event => {
-          await controlPlane.appendSemanticToolInputEvidence(event);
+          if (!input.appendSemanticToolInputEvidence) throw new Error("native_semantic_input_evidence_persistence_unavailable");
+          await input.appendSemanticToolInputEvidence(event);
         },
         provider:
           input.execution.provider.kind === "codex"
