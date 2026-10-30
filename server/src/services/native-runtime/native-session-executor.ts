@@ -12474,6 +12474,9 @@ async function createRunnerdBackendWithinSessionClaim(
         measureOperation: process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ? measureRunnerOperation : undefined,
         recordTimingReceipt: process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ? recordRunnerTimingReceipt : undefined,
         ...owner.driver, runnerArtifact: input.controllerPersistence?.runnerArtifact ?? description.runner,
+        onSemanticToolInputCommitted: async event => {
+          await controlPlane.appendEvent(event);
+        },
         controlPlaneRegistration: input.controllerPersistence ? async (authority, identity, signal) => {
           await nativeRunnerCheckpointRegistration({
             ...nativeRunnerCheckpointPersistence(input.db, input.controllerPersistence!.bootId,
@@ -13967,6 +13970,9 @@ async function createRunnerdBackendWithinSessionClaim(
           runnerInstanceId: effectiveRunnerInstanceId,
           event,
         }),
+        onSemanticToolInputCommitted: async event => {
+          await controlPlane.appendEvent(event);
+        },
         provider:
           input.execution.provider.kind === "codex"
             ? "codex"

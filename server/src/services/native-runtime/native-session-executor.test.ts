@@ -15876,7 +15876,7 @@ describe("runnerd provider runtime wiring", () => {
     );
   });
 
-  it("passes the persisted OpenCode permission mode to runnerd", async () => {
+  it("passes the OpenCode permission mode and semantic-input persistence to runnerd", async () => {
     const opencodeExecution = {
       ...execution,
       schema: "paperclip.native-execution-input.v4",
@@ -15905,6 +15905,7 @@ describe("runnerd provider runtime wiring", () => {
       expect.objectContaining({
         provider: "opencode",
         opencodePermissionMode: "deny",
+        onSemanticToolInputCommitted: expect.any(Function),
       }),
     );
   });
