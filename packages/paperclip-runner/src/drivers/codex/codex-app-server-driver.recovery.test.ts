@@ -62,6 +62,30 @@ function cursorProviderIdentity(mode: unknown) {
 }
 
 describe("Codex app-server Codex driver", () => {
+  it("retries cleanup by verifying and closing the exact idle thread without resuming it", async () => {
+    const transport = new FakeCodexTransport("thread-cleanup", "provider-cleanup");
+    transport.readResponse = { thread: { id: "thread-cleanup", sessionId: "provider-cleanup", cwd: WORKSPACE,
+      turns: [{ id: "turn-done", status: "failed", items: [] }] } };
+    const close = vi.spyOn(transport, "close");
+    const driver = makeDriver([transport]);
+    await driver.retryCleanup!({ driverKind: "codex_app_server", driverSessionId: "thread-cleanup",
+      providerSessionId: "provider-cleanup", runId: "run-cleanup", normalizedSessionId: "session-cleanup",
+      activeTurnId: null, pendingRuntimeRequests: [], terminalTurns: [{ turnId: "turn-done", fingerprint: "{}" }] });
+    expect(transport.calls.map(call => call.method)).toContain("thread/read");
+    expect(transport.calls.map(call => call.method)).not.toContain("thread/resume");
+    expect(transport.calls.map(call => call.method)).not.toContain("turn/start");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("refuses cleanup retry if the saved provider session still has an active turn", async () => {
+    const transport = new FakeCodexTransport("thread-cleanup", "provider-cleanup");
+    const driver = makeDriver([transport]);
+    await expect(driver.retryCleanup!({ driverKind: "codex_app_server", driverSessionId: "thread-cleanup",
+      providerSessionId: "provider-cleanup", runId: "run-cleanup", normalizedSessionId: "session-cleanup",
+      activeTurnId: "turn-active", pendingRuntimeRequests: [], terminalTurns: [] })).rejects.toThrow(/idle provider session/);
+    expect(transport.calls).toHaveLength(0);
+  });
+
   it.each(["agent", "plan", "ask"])("retains native Cursor %s mode through checkpoint and recovery", async (mode) => {
     const identity = cursorProviderIdentity(mode);
     const first = new FakeCodexTransport("thread-1", "provider-session-1", identity);

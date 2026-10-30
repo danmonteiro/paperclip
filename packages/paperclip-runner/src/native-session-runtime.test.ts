@@ -4483,8 +4483,9 @@ describe("executeNativeSession recovery", () => {
       startTurn: async () => ({ turnId: "operator-cleanup-turn" }), result: async () => null,
       async snapshot() { return { backendKind: "mock", sessionId: scopedIdentity.sessionId, identity: scopedIdentity,
         providerSessionId: "operator-cleanup-provider", cursor: null, activeTurnId: null, pendingRuntimeRequests: [], lineage: [] }; },
-      close: vi.fn(async ({ reason }: { reason: string }) => {
-        if (reason !== "operator requested exact native session cleanup retry") throw closeFailure;
+      close: vi.fn(async () => { throw closeFailure; }),
+      retryCleanup: vi.fn(async ({ reason }: { reason: string }) => {
+        expect(reason).toBe("operator requested exact native session cleanup retry");
         if (failOperatorRetry) {
           failOperatorRetry = false;
           throw closeFailure;
@@ -4515,8 +4516,8 @@ describe("executeNativeSession recovery", () => {
     expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("still_incomplete");
     expect(await retryQuarantinedNativeSessionCleanup({ ...binding, issueId: "other-issue" })).toBe("not_found");
     expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("settled");
-    expect(session.close).toHaveBeenCalledTimes(3);
-    expect(session.close).toHaveBeenLastCalledWith({ reason: "operator requested exact native session cleanup retry" });
+    expect(session.retryCleanup).toHaveBeenCalledTimes(2);
+    expect(session.close).toHaveBeenCalledOnce();
     expect(await retryQuarantinedNativeSessionCleanup(binding)).toBe("not_found");
     expect(backend.openSession).toHaveBeenCalledOnce();
     expect(controlPlane.completeRun).not.toHaveBeenCalled();

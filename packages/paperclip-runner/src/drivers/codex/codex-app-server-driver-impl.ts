@@ -678,6 +678,69 @@ export class CodexAppServerDriver implements HarnessDriver {
     }
   }
 
+  /** Retry cleanup through a fresh controller attached to the exact idle provider thread.
+   * This intentionally never constructs a task session or calls thread/resume. */
+  async retryCleanup(
+    snapshot: PersistedHarnessSession,
+    options: HarnessSessionRecoveryOptions = { signal: new AbortController().signal },
+  ): Promise<void> {
+    options.signal.throwIfAborted();
+    if (!this.#options.transportFactory || !this.#caps.read || !snapshot.runId || !snapshot.normalizedSessionId ||
+        !snapshot.driverSessionId || !snapshot.providerSessionId ||
+        snapshot.activeTurnId !== null || (snapshot.pendingRuntimeRequests?.length ?? 0) > 0 ||
+        (snapshot.terminalTurns?.length ?? 0) === 0) {
+      throw new Error("native cleanup retry requires a fully identified idle provider session");
+    }
+    const workingDirectory = snapshot.workingDirectory
+      ? validateWorkingDirectory(snapshot.workingDirectory, this.#options.environment, this.#options.workingDirectoryAuthority)
+      : undefined;
+    const transport = this.#transport({
+      ...(workingDirectory ? { workingDirectory } : {}),
+      providerRecoveryPolicy: snapshot.providerRecoveryPolicy,
+      persistedSession: {
+        driverSessionId: snapshot.driverSessionId,
+        providerSessionId: snapshot.providerSessionId,
+        providerIdentity: snapshot.providerIdentity,
+        activeTurnId: null,
+      },
+    });
+    const cancellation = bootstrapCancellation(transport, options.signal);
+    try {
+      await cancellation.wait(this.#persistProcessOwnership(transport));
+      await cancellation.wait(this.#initialize(transport));
+      const existing = await cancellation.wait(readCodexThreadState(transport, snapshot.driverSessionId));
+      const thread = record(existing.thread);
+      if (text(thread.id) !== snapshot.driverSessionId || text(thread.sessionId) !== snapshot.providerSessionId) {
+        throw new Error("native cleanup retry provider session identity changed");
+      }
+      const actualIdentity = parseProviderIdentity(thread.providerIdentity);
+      if (snapshot.providerIdentity && canonicalJson(actualIdentity ?? null) !== canonicalJson(snapshot.providerIdentity)) {
+        throw new Error("native cleanup retry tagged provider identity changed");
+      }
+      const actualWorkingDirectory = validateWorkingDirectory(
+        text(thread.cwd), this.#options.environment, this.#options.workingDirectoryAuthority,
+      );
+      if (workingDirectory && actualWorkingDirectory !== workingDirectory) {
+        throw new Error("native cleanup retry working directory changed");
+      }
+      const turns = await cancellation.wait(readCodexTurnMetadata(transport, snapshot.driverSessionId));
+      if (turns.some(turn => text(turn.status) === "inProgress")) {
+        throw new Error("native cleanup retry found an active provider turn");
+      }
+      const savedTerminalId = snapshot.terminalTurns!.at(-1)!.turnId;
+      const savedTerminal = turns.find(turn => text(turn.id) === savedTerminalId);
+      if (!savedTerminal || !["completed", "failed", "interrupted", "cancelled"].includes(text(savedTerminal.status))) {
+        throw new Error("native cleanup retry could not verify the saved terminal provider turn");
+      }
+      await cancellation.wait(transport.close("operator requested exact native session cleanup retry"));
+    } catch (error) {
+      await cancellation.close().catch(() => undefined);
+      throw error;
+    } finally {
+      cancellation.detach();
+    }
+  }
+
   #resumeThreadParams(threadId: string, workingDirectory: string): Record<string, unknown> {
     return {
       excludeTurns: true, threadId,

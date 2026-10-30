@@ -32,7 +32,7 @@ test("forced Turbo tasks omit result caching while retaining the cache directory
     cacheDir: ".turbo/cache", force: true, dryRun: false, args: ["--shard-index", "0"] });
   assert.ok(args.includes("--force"));
   assert.ok(args.includes("--cache-dir=.turbo/cache"));
-  assert.ok(!args.some((arg) => arg.startsWith("--cache=") || arg === "--cache"));
+  assert.ok(args.includes("--cache=local:r"), "forced tasks must not write results to any cache");
   assert.deepEqual(args.slice(-3), ["--", "--shard-index", "0"]);
 
   const cachedArgs = turboArgs({ target: "//#ci:server", runtimeConfig: ".turbo/task.json",

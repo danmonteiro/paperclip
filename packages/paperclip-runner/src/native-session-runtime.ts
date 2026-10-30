@@ -169,9 +169,10 @@ export async function retryQuarantinedNativeSessionCleanup(binding: {
 
   cleanup.operatorRecoveryRequired = false;
   cleanup.automaticAttempts += 1;
-  const attempt = Promise.resolve().then(() => cleanup.session.close({
-    reason: "operator requested exact native session cleanup retry",
-  }));
+  const closeInput = { reason: "operator requested exact native session cleanup retry" };
+  const attempt = Promise.resolve().then(() => cleanup.session.retryCleanup
+    ? cleanup.session.retryCleanup(closeInput)
+    : cleanup.session.close(closeInput));
   cleanup.attempt = attempt;
   failedSessionCleanupOwners.set(attempt, cleanup.domain);
   try {

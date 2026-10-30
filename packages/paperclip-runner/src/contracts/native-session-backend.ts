@@ -253,6 +253,8 @@ export interface NativeSession {
    * or become an unhandled rejection.
    */
   close(input: { reason: string }): Promise<void>;
+  /** Reattach to the exact idle provider session and retry cleanup without replaying its last turn. */
+  retryCleanup?(input: { reason: string }): Promise<void>;
 }
 
 /** Normalized control-plane boundary shared by runner and hosted backends. */
