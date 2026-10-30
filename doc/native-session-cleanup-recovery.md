@@ -43,15 +43,21 @@ Older quarantines that lack these identities are not eligible. They return
 `not_eligible`; preserve their state and use the returned `nextAction` to
 investigate the exact run. Do not use this action as a generic unblock.
 
-### Pending semantic tool input
+### Pending or completed semantic tool calls
 
-If the retained journal contains `semantic_tool.input`, this reconciler returns
-`not_eligible`. It does not invoke that operation again or infer whether its
-external effect completed. Use the exact `operationId` and `callId` to inspect
-the target system through its read-only state or audit history. Record the
-verified outcome against the Issue and run. Do not replay the operation or
-clear the pending journal entry. This action has no override for uncertain
-tool effects; reconcile them separately before any task retry.
+An unresolved `semantic_tool.input` in the runner outbox or provider pending
+queue is not eligible. The reconciler does not invoke it again or infer whether
+its effect completed. Use the exact `operationId` and `callId` to inspect the
+target system through its read-only state or audit history. Record the verified
+outcome against the Issue and run. Do not replay the operation or clear the
+pending journal entry.
+
+A fully committed `paperclip_finish` input can be eligible only when its
+matching successful `semantic_tool.result` and completed result command are
+also present, and the input matches the accepted final run result. This is a
+proof check; the cleanup action does not invoke `paperclip_finish` again.
+Uncertain effects outside this exact contract must be reconciled separately
+before any task retry.
 
 When eligible, Paperclip reconciles a staged copy while preserving the
 original quarantine and saved run result. Only after verifying the reconciled
