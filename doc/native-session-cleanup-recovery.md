@@ -52,6 +52,15 @@ target system through its read-only state or audit history. Record the verified
 outcome against the Issue and run. Do not replay the operation or clear the
 pending journal entry.
 
+There is one narrower exception: the archive-only path can retire a stopped
+Codex session when the durable control-plane command records
+`semantic_tool_not_dispatched` for the exact call, the matching input is
+persisted and hashed, the provider is `prepared` with its turn closed, no
+result event exists, and both exact process owners are absent. It preserves the
+original journal in quarantine and does not start a runner/provider, synthesize
+a tool result, or retry the task. Any missing or contradictory evidence keeps
+the Issue blocked.
+
 A fully committed `paperclip_finish` input can be eligible only when its
 matching successful `semantic_tool.result` and completed result command are
 also present, and the input matches the accepted final run result. This is a

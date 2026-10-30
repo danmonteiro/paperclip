@@ -138,6 +138,7 @@ export const applyNativeSessionGoalControl =
 export const completeRetainedNativeSessionCleanup = runner.completeRetainedNativeSessionCleanup;
 export const retryQuarantinedNativeSessionCleanup = runner.retryQuarantinedNativeSessionCleanup;
 export const settleRetainedRunnerdSession = runner.settleRetainedRunnerdSession;
+export const proveRetainedRunnerdNotDispatchedArchive = runner.proveRetainedRunnerdNotDispatchedArchive;
 export const retainedRunnerdMaintenanceIsIdle =
   runner.retainedRunnerdMaintenanceIsIdle;
 export const drainRetainedRunnerdMaintenanceOperations =

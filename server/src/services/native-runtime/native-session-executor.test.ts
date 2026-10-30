@@ -369,7 +369,9 @@ import {
   verifyStoppedNativeSessionForContinuation,
   nativePreProviderRetryAfterCleanupStateIsSafe,
   reconcileRetainedNativeSessionCleanup,
+  assertRetainedNativeSourceArchiveSettled,
   retainedNativeCleanupJournalMatches,
+  retainedNativeNotDispatchedJournalMatches,
   nativeProviderUsageLimitFromEvent,
   nativeSessionFailureSourceCode,
   nativeSessionRecoveryProjection,
@@ -3957,6 +3959,129 @@ const execution = {
   credentialBindings: [],
 } as NativeExecutionInputV1;
 
+describe("retained native not-dispatched journal proof", () => {
+  const fixture = () => {
+    const run = {
+      id: execution.binding.runId,
+      companyId: execution.binding.companyId,
+      agentId: execution.binding.agentId,
+      nativeIssueId: execution.binding.issueId,
+      nativeSessionId: execution.session.normalizedSessionId,
+      runnerInstanceId: "runner-not-dispatched",
+    };
+    const identity = {
+      runnerInstanceId: run.runnerInstanceId,
+      runId: run.id,
+      normalizedSessionId: run.nativeSessionId,
+      turnId: "turn-not-dispatched",
+      itemId: "item-not-dispatched",
+    };
+    const base = {
+      schema: "paperclip.prp.event.v1",
+      schemaVersion: 1,
+      sourceKind: "runner",
+      sourceSeq: 1,
+      sourceEventId: "event-not-dispatched",
+      sourceInstanceId: identity.runnerInstanceId,
+      runId: identity.runId,
+      normalizedSessionId: identity.normalizedSessionId,
+      turnId: identity.turnId,
+      itemId: identity.itemId,
+      priority: 1,
+      emittedAt: new Date().toISOString(),
+    };
+    const providerEvent = {
+      ...base,
+      eventType: "session.started",
+      payload: { providerSessionId: "thread-not-dispatched", processId: 99999998 },
+    };
+    const callId = "call-not-dispatched";
+    const operationId = "set_task_title";
+    const sourceEventId = "event-semantic-not-dispatched";
+    const semantic = createPrpSemanticToolInputEnvelope({
+      callId,
+      operationId,
+      correlation: {
+        runId: run.id,
+        normalizedSessionId: run.nativeSessionId!,
+        turnId: identity.turnId,
+        itemId: identity.itemId,
+      },
+      content: { title: "safe fixture" },
+    });
+    const inputEvent = {
+      ...base,
+      sourceSeq: 2,
+      sourceEventId,
+      eventType: "semantic_tool.input",
+      payload: { semantic_tool: semantic },
+    };
+    const persisted = [inputEvent].map(event => ({
+      eventType: event.eventType,
+      sourceInstanceId: event.sourceInstanceId,
+      sourceEventId: event.sourceEventId,
+      sourceSeq: event.sourceSeq,
+      sourcePayloadSha256: nativeSha256(event),
+      payload: { prpEvent: event },
+    }));
+    const control = {
+      commands: [
+        { type: "turn.start", status: "completed" },
+        { type: "turn.stop", status: "completed" },
+        {
+          type: "semantic_tool.result",
+          status: "pending",
+          payload: {
+            callId,
+            operationId,
+            sourceEventId,
+            sourceEventType: "semantic_tool.input",
+            isError: true,
+            result: { error: { code: "semantic_tool_not_dispatched", retryable: false } },
+          },
+        },
+        { type: "runner.suspend", status: "pending" },
+      ],
+      committedEvents: [providerEvent, inputEvent].map(event => ({ envelope: { payload: event } })),
+    };
+    return { run, control, persisted, callId, operationId, sourceEventId };
+  };
+
+  it("accepts only the exact persisted call with a durable not-dispatched result", () => {
+    const value = fixture();
+    expect(retainedNativeNotDispatchedJournalMatches({
+      run: value.run,
+      control: value.control,
+      providerSessionId: "thread-not-dispatched",
+      providerPid: 99999998,
+      persistedEvents: value.persisted,
+    })).toEqual({
+      callId: value.callId,
+      operationId: value.operationId,
+      sourceEventId: value.sourceEventId,
+    });
+  });
+
+  it.each(["dispatch_error", "not_retryable_missing", "extra_input", "missing_persisted_input"])(
+    "fails closed when evidence is %s",
+    mode => {
+      const value = fixture();
+      const command = value.control.commands[2]!.payload as Record<string, any>;
+      if (mode === "dispatch_error") command.result.error.code = "dispatcher_rejected";
+      if (mode === "not_retryable_missing") delete command.result.error.retryable;
+      if (mode === "extra_input") value.control.committedEvents.push(value.control.committedEvents[1]!);
+      if (mode === "missing_persisted_input") value.persisted.length = 0;
+      expect(retainedNativeNotDispatchedJournalMatches({
+        run: value.run,
+        control: value.control,
+        providerSessionId: "thread-not-dispatched",
+        providerPid: 99999998,
+        persistedEvents: value.persisted,
+      })).toBeNull();
+    },
+  );
+});
+
 describe("retained native cleanup activation", () => {
   it("retains operation ownership through original callbacks after a cleanup failure", async () => {
     const failure = new Error("cleanup database failure");
@@ -4065,11 +4190,14 @@ describe("retained native cleanup activation", () => {
     "active_environment",
     "active_finalization_lease",
     "active_provider_process",
+    "not_dispatched_archive",
   ])("preserves exact original evidence for %s", async (mode) => {
     const directory = await mkdtemp(
       join(tmpdir(), "paperclip-maintenance-activation-"),
     );
     let providerHomeDatabase: DatabaseSync | undefined;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    let processKill: ReturnType<typeof vi.spyOn> | undefined;
     let releaseMaintenance!: () => void;
     const maintenance = new Promise<void>(resolve => { releaseMaintenance = resolve; });
     let unsubscribeMaintenance: (() => void) | undefined;
@@ -4221,20 +4349,30 @@ describe("retained native cleanup activation", () => {
         : semanticResult;
     const semantic = {
       ...createPrpSemanticToolInputEnvelope({
-        callId: "finish-call",
-        operationId: "paperclip_finish",
+        callId: mode === "not_dispatched_archive" ? "title-call" : "finish-call",
+        operationId: mode === "not_dispatched_archive" ? "set_task_title" : "paperclip_finish",
         correlation,
-        content: semanticInput,
+        content: mode === "not_dispatched_archive" ? { title: "fixture title" } : semanticInput,
       }),
-      input: semanticInput,
+      input: mode === "not_dispatched_archive" ? { title: "fixture title" } : semanticInput,
     };
     const rawInput = {
       ...event,
-      sourceEventId: "raw-finish-input",
+      sourceEventId: mode === "not_dispatched_archive"
+        ? `${identity.runnerInstanceId}:${identity.runId}:3`
+        : "raw-finish-input",
       sourceSeq: 3,
       eventType: "semantic_tool.input",
       turnId: correlation.turnId,
       payload: { semantic_tool: semantic },
+    };
+    const semanticInputRow = {
+      eventType: rawInput.eventType,
+      sourceInstanceId: rawInput.sourceInstanceId,
+      sourceEventId: rawInput.sourceEventId,
+      sourceSeq: rawInput.sourceSeq,
+      payload: { prpEvent: rawInput },
+      sourcePayloadSha256: nativeSha256(rawInput),
     };
     const rawResult = {
       ...event,
@@ -4281,32 +4419,52 @@ describe("retained native cleanup activation", () => {
           },
         },
       },
+      ...(mode === "not_dispatched_archive"
+        ? [{ type: "turn.stop", status: "completed" }]
+        : []),
       ...(mode === "missing_result_command"
         ? []
         : [
-            {
-              type: "semantic_tool.result",
-              status: "completed",
-              payload: {
-                callId: semantic.callId,
-                operationId: semantic.operationId,
-                ...(mode === "digest_only_command" || mode === "wrong_command_digest"
-                  ? { inputDigest: mode === "wrong_command_digest" ? "wrong" : nativeSha256(semanticInput) }
-                  : { input: semanticInput, ...(mode === "conflicting_command_digest" ? { inputDigest: "wrong" } : {}) }),
-                correlation,
-                sourceEventId: rawInput.sourceEventId,
-                sourceEventType: rawInput.eventType,
-                isError: false,
-              },
-              result: { result: { callId: semantic.callId } },
-            },
+            mode === "not_dispatched_archive"
+              ? {
+                  type: "semantic_tool.result",
+                  status: "pending",
+                  payload: {
+                    callId: semantic.callId,
+                    operationId: semantic.operationId,
+                    correlation,
+                    sourceEventId: rawInput.sourceEventId,
+                    sourceEventType: rawInput.eventType,
+                    isError: true,
+                    result: { error: { code: "semantic_tool_not_dispatched", retryable: false } },
+                  },
+                }
+              : {
+                  type: "semantic_tool.result",
+                  status: "completed",
+                  payload: {
+                    callId: semantic.callId,
+                    operationId: semantic.operationId,
+                    ...(mode === "digest_only_command" || mode === "wrong_command_digest"
+                      ? { inputDigest: mode === "wrong_command_digest" ? "wrong" : nativeSha256(semanticInput) }
+                      : { input: semanticInput, ...(mode === "conflicting_command_digest" ? { inputDigest: "wrong" } : {}) }),
+                    correlation,
+                    sourceEventId: rawInput.sourceEventId,
+                    sourceEventType: rawInput.eventType,
+                    isError: false,
+                  },
+                  result: { result: { callId: semantic.callId } },
+                },
           ]),
+      ...(mode === "not_dispatched_archive"
+        ? [{ type: "runner.suspend", status: "pending" }]
+        : []),
     ];
     const run = {
       id: identity.runId,
       ...execution.binding,
       runtimeMode: "native",
-      status: "succeeded",
+      status: mode === "not_dispatched_archive" ? "failed" : "succeeded",
       nativeIssueId: execution.binding.issueId,
       nativeSessionId: identity.normalizedSessionId,
       runnerInstanceId: identity.runnerInstanceId,
@@ -4364,7 +4522,7 @@ describe("retained native cleanup activation", () => {
                   ? []
                   : [coordinator]
                 : table === nativeRunResults
-                  ? [accepted]
+                  ? mode === "not_dispatched_archive" ? [] : [accepted]
                   : table === heartbeatRunEvents
                     ? mode.startsWith("released_identity") && !stopReceiptRead
                       ? ((stopReceiptRead = true),
@@ -4379,7 +4537,7 @@ describe("retained native cleanup activation", () => {
                               },
                             ]
                           : [])
-                      : [identityRow]
+                    : [identityRow, ...(mode === "not_dispatched_archive" ? [semanticInputRow] : [])]
                     : [];
           const query = {
             where: () => query,
@@ -4545,16 +4703,27 @@ describe("retained native cleanup activation", () => {
                 },
               },
               rawInput,
-              rawResult,
+              ...(mode === "not_dispatched_archive" ? [] : [rawResult]),
             ].map((payload) => ({ envelope: { payload } })),
           },
         ],
-        ["runner/runner-state.json", durableRunnerState(identity, "ready")],
+        ["runner/runner-state.json", {
+          ...durableRunnerState(identity, "ready"),
+          ...(mode === "not_dispatched_archive" ? { outbox: [], pendingTerminalDelivery: null, pendingProviderCleanup: null } : {}),
+        }],
         [
           "runner/codex-provider-state.json",
           {
-            lifecycle: "turn_active",
+            ...(mode === "not_dispatched_archive" ? { schema: "paperclip.runner.codex-provider-state.v1" } : {}),
+            lifecycle: mode === "not_dispatched_archive" ? "prepared" : "turn_active",
             threadId: "exact-thread",
+            ...(mode === "not_dispatched_archive" ? {
+              activeProviderTurnId: null,
+              turnClosed: true,
+              pendingEvents: [],
+              queuedEvents: [],
+              toolBridge: { turnClosed: true, pending: { callId: "title-call", operationId: "set_task_title" } },
+            } : {}),
             config: {
               provider: "codex",
               command: "codex",
@@ -4588,6 +4757,7 @@ describe("retained native cleanup activation", () => {
           "bad_identity_hash",
           "foreign_semantic_scope",
           "wrong_provider_account",
+          "not_dispatched_archive",
         ].includes(mode),
       );
       for (const [file, data] of source)
@@ -4919,6 +5089,15 @@ describe("retained native cleanup activation", () => {
       }
       state.cleanup.mockReset();
       state.retireCleanup.mockReset();
+      if (mode === "not_dispatched_archive") {
+        expect(retainedNativeNotDispatchedJournalMatches({
+          run,
+          control: source[0][1] as Record<string, unknown>,
+          providerSessionId: "exact-thread",
+          providerPid: 99_999_998,
+          persistedEvents: [identityRow, semanticInputRow],
+        })).toEqual({ callId: "title-call", operationId: "set_task_title", sourceEventId: rawInput.sourceEventId });
+      }
       state.cleanup.mockImplementation(async (input) => {
         if (canonicalSource) {
           const archived = (
@@ -5090,6 +5269,14 @@ describe("retained native cleanup activation", () => {
         state.drainMaintenance.mockReturnValueOnce(maintenance);
         unsubscribeMaintenance = onRetainedNativeSessionCleanupRelease(db, maintenanceReleased);
       }
+      if (mode === "not_dispatched_archive") {
+        Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+        processKill = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+          if (Math.abs(pid) === 99_999_999 || Math.abs(pid) === 99_999_998)
+            throw Object.assign(new Error("fixture process absent"), { code: "ESRCH" });
+          return true;
+        });
+      }
       const pendingOutcome = reconcileRetainedNativeSessionCleanup(
         db as unknown as Db,
         { companyId: run.companyId, runId: run.id },
@@ -5248,6 +5435,7 @@ describe("retained native cleanup activation", () => {
         "empty_root",
         "distinct_provider_account",
         "released_identity",
+        "not_dispatched_archive",
       ].includes(mode);
       expect(outcome.status).toBe(
         waitingFor ? "deferred" : succeeds
@@ -5294,7 +5482,7 @@ describe("retained native cleanup activation", () => {
         "home_selected_reverted_rollout",
       ].includes(mode);
       expect(state.cleanup).toHaveBeenCalledTimes(
-        ineligible || waitingFor || deniedBeforeLaunch ? 0 : 1,
+        mode === "not_dispatched_archive" || ineligible || waitingFor || deniedBeforeLaunch ? 0 : 1,
       );
       expect(state.retireCleanup).toHaveBeenCalledTimes(succeeds ? 1 : 0);
       expect(coordinator.phase).toBe("committed");
@@ -5375,7 +5563,17 @@ describe("retained native cleanup activation", () => {
         expect(await readdir(root)).toEqual([]);
         expect(await readdir(`${root}.original-empty`)).toEqual([]);
       }
-      if (succeeds) {
+      if (succeeds && mode === "not_dispatched_archive") {
+        await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(coordinator.recoveryHistory.map((entry: Record<string, unknown>) => entry.phase)).toEqual(["prepared", "archived", "settled"]);
+        expect(state.cleanup).not.toHaveBeenCalled();
+        expect(state.retireCleanup).toHaveBeenCalledTimes(1);
+        await expect(assertRetainedNativeSourceArchiveSettled(db as unknown as Db, {
+          companyId: run.companyId,
+          issueId: run.nativeIssueId,
+          stateKey: key,
+        })).resolves.toBeUndefined();
+      } else if (succeeds) {
         await access(root);
         const activatedIndex = new DatabaseSync(
           join(root, "codex-home/state_5.sqlite"),
@@ -5522,6 +5720,8 @@ describe("retained native cleanup activation", () => {
       proofSpy.mockRestore();
       state.maintenanceIdle.mockReset().mockReturnValue(true);
       releaseCommit();
+      processKill?.mockRestore();
+      Object.defineProperty(process, "platform", platformDescriptor);
       if (previous === undefined) delete process.env.PAPERCLIP_RUNNER_STATE_DIR;
       else process.env.PAPERCLIP_RUNNER_STATE_DIR = previous;
       await rm(directory, { recursive: true, force: true });
