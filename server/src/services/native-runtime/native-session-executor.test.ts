@@ -191,6 +191,7 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   cleanup: vi.fn(),
   retireCleanup: vi.fn(),
+  retryCleanup: vi.fn(),
   maintenanceIdle: vi.fn(() => true),
   drainMaintenance: vi.fn(async (): Promise<void> => undefined),
   createTransport: vi.fn((_options: RunnerTransportOptions) => ({
@@ -276,6 +277,7 @@ vi.mock("../../vendor/paperclip-runner/index.js", async (importOriginal) => {
     retainedRunnerdMaintenanceIsIdle: state.maintenanceIdle,
     drainRetainedRunnerdMaintenanceOperations: state.drainMaintenance,
     completeRetainedNativeSessionCleanup: state.retireCleanup,
+    retryQuarantinedNativeSessionCleanup: state.retryCleanup,
     parsePaperclipQuestionSet: (value: unknown) => value,
   };
 });
@@ -398,6 +400,7 @@ import {
   runtimeQuestionFallbackFromEvent,
   resolveNativeRuntimeRequest,
   resolveNativeHarnessPersistenceProfile,
+  retryNativeSessionCleanupForRun,
   runnerdStateProvesIncompleteBootstrap,
   semanticProviderPlanMarkdown,
   sha256DirectoryTree,
@@ -411,6 +414,7 @@ import { onNativeRunnerEvidence } from "./native-runner-evidence-signal.js";
 
 beforeEach(() => {
   state.drainMaintenance.mockReset().mockResolvedValue(undefined);
+  state.retryCleanup.mockReset().mockResolvedValue("settled");
   usageRecorder.capture.mockReset().mockImplementation(async receipt => receipt);
   usageRecorder.create.mockReset().mockResolvedValue({ capture: usageRecorder.capture,
     complete: vi.fn(async () => ({ complete: true })), persistFailure: vi.fn(async () => undefined) });
@@ -421,6 +425,74 @@ beforeEach(() => {
   state.resolveRemoteRunnerBinary.mockReset().mockImplementation(async (input: { configuredPath?: string | null }) => input.configuredPath || "/tmp/paperclip-runnerd");
   state.resolveCurrentWakeCommentsBinding.mockReset().mockResolvedValue(null);
   state.assertCurrentWakeCommentsRead.mockReset().mockResolvedValue(undefined);
+});
+
+describe("operator native session cleanup recovery", () => {
+  it("retries cleanup only for the exact terminal native run owner", async () => {
+    const run = {
+      id: "cleanup-run",
+      companyId: "cleanup-company",
+      issueId: "cleanup-issue",
+      agentId: "cleanup-agent",
+      sessionId: "cleanup-session",
+      runnerInstanceId: "cleanup-runner",
+      runtimeMode: "native",
+      status: "failed",
+      finishedAt: new Date(),
+    };
+    const query = {
+      from: vi.fn(),
+      where: vi.fn(),
+      limit: vi.fn().mockResolvedValue([run]),
+    };
+    query.from.mockReturnValue(query);
+    query.where.mockReturnValue(query);
+    const db = { select: vi.fn(() => query) } as unknown as Db;
+
+    await expect(retryNativeSessionCleanupForRun(db, {
+      companyId: run.companyId,
+      issueId: run.issueId,
+      runId: run.id,
+    })).resolves.toBe("settled");
+
+    expect(query.limit).toHaveBeenCalledWith(1);
+    expect(state.retryCleanup).toHaveBeenCalledWith({
+      companyId: run.companyId,
+      issueId: run.issueId,
+      runId: run.id,
+      sessionId: run.sessionId,
+      agentId: run.agentId,
+      runnerInstanceId: run.runnerInstanceId,
+    });
+  });
+
+  it("does not retry cleanup for a non-terminal run", async () => {
+    const query = {
+      from: vi.fn(),
+      where: vi.fn(),
+      limit: vi.fn().mockResolvedValue([{
+        id: "cleanup-run",
+        companyId: "cleanup-company",
+        issueId: "cleanup-issue",
+        agentId: "cleanup-agent",
+        sessionId: "cleanup-session",
+        runnerInstanceId: "cleanup-runner",
+        runtimeMode: "native",
+        status: "running",
+        finishedAt: null,
+      }]),
+    };
+    query.from.mockReturnValue(query);
+    query.where.mockReturnValue(query);
+    const db = { select: vi.fn(() => query) } as unknown as Db;
+
+    await expect(retryNativeSessionCleanupForRun(db, {
+      companyId: "cleanup-company",
+      issueId: "cleanup-issue",
+      runId: "cleanup-run",
+    })).resolves.toBe("not_eligible");
+    expect(state.retryCleanup).not.toHaveBeenCalled();
+  });
 });
 
 describe("first meaningful native agent event", () => {
