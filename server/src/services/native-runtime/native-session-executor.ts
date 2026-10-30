@@ -3537,7 +3537,11 @@ async function inspectRetainedNativeSessionCleanup(
       const persisted = await tx
         .select()
         .from(heartbeatRunEvents)
-        .where(retainedNativeCleanupPersistedEventsPredicate(run))
+        .where(retainedNativeCleanupPersistedEventsPredicate({
+          id: run.id,
+          companyId: run.companyId,
+          runnerInstanceId: run.runnerInstanceId!,
+        }))
         .limit(20);
       const notDispatchedCall = persisted.length < 20
         ? retainedNativeNotDispatchedJournalMatches({
@@ -9385,7 +9389,9 @@ async function executePaperclipNativeSessionWithinScope(
             // projects remoteCwd into the provider execution boundary.
             execution: input.execution,
             runnerInstanceId: effectiveRunnerInstanceId,
-            appendSemanticToolInputEvidence: event => controlPlane.appendSemanticToolInputEvidence(event),
+            appendSemanticToolInputEvidence: async event => {
+              await controlPlane.appendSemanticToolInputEvidence(event);
+            },
             pluginTaskDescription,
             retainedPluginTaskOwner: existingWarmSession ? pluginTaskSessionOwners.get(existingWarmSession) : undefined,
             durableEnvironmentLeaseId: durableRunnerBinding?.environmentLeaseId,
@@ -9416,7 +9422,9 @@ async function executePaperclipNativeSessionWithinScope(
           nativeSessionConfigDigest(remoteWarmRecovery.previousExecution, "remote"), await recovered.session.snapshot());
         persistedWarmSession = loadWarmNativeCheckpoint(input.execution, warmConfigDigest!, "remote");
         runnerdBackend = await createRunnerdBackend({ ...input, runnerInstanceId: effectiveRunnerInstanceId,
-          appendSemanticToolInputEvidence: event => controlPlane.appendSemanticToolInputEvidence(event),
+          appendSemanticToolInputEvidence: async event => {
+            await controlPlane.appendSemanticToolInputEvidence(event);
+          },
           controllerPersistence: input.runnerExecutionTarget?.kind === "remote" ? { bootId: controller.bootId } : undefined,
           durableEnvironmentLeaseId: durableRunnerBinding?.environmentLeaseId, trace, toolTrace });
       }
