@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { build } from "esbuild";
 import { verifyNativeAcpxInstallation } from "./installation-integrity.js";
@@ -87,43 +87,15 @@ vi.mock("./installation-integrity.js", () => ({ verifyNativeAcpxInstallation: vi
 
 describe("Copilot build-owned installation", () => {
   it("admits the current profile with environment launch preparation", () => {
-    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(104);
+    expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(105);
     expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBeUndefined();
     expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
-  it("preserves profile 100 while binding fail-closed Codex cleanup in profile 101", () => {
-    const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v100-identity.json", import.meta.url), "utf8"));
-    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v101-identity.json", import.meta.url), "utf8"));
-    expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual([
-      "agentProfileVersion", "cleanupRecoverySourceSha256", "nativeSessionContractSourceSha256",
-    ]);
-    expect(Object.keys(current.declaration).sort()).toEqual(Object.keys(prior.declaration).sort());
-    expect(isSupportedAcpxProfileVersion("copilot", 100)).toBe(true);
-  });
-
-  it("preserves profile 101 while binding merged native cleanup recovery in profile 102", () => {
-    const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v101-identity.json", import.meta.url), "utf8"));
-    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v102-identity.json", import.meta.url), "utf8"));
-    expect(current.declaration.agentProfileVersion).toBe(102);
-    expect(current.commandDigest).not.toBe(prior.commandDigest);
-    const changed = Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]);
-    expect(changed.sort()).toEqual([
-      "agentProfileVersion", "harnessSessionSourceSha256", "profileCompatibilitySourceSha256",
-      "runtimeRequestBridgeSourceSha256", "runtimeRequestFacadeSourceSha256",
-    ]);
-    expect(isSupportedAcpxProfileVersion("copilot", 101)).toBe(true);
-    expect(isSupportedAcpxProfileVersion("copilot", 102)).toBe(true);
-  });
-
-  it("preserves the intermediate semantic-call identity while binding profile 104", () => {
-    const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v103-identity.json", import.meta.url), "utf8"));
-    const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v104-identity.json", import.meta.url), "utf8"));
-    expect(current.declaration.agentProfileVersion).toBe(104);
-    expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort())
-      .toEqual(["agentProfileVersion", "profileCompatibilitySourceSha256"]);
+  it("keeps saved Copilot profiles from the native cleanup branch decodable", () => {
     expect(isSupportedAcpxProfileVersion("copilot", 102)).toBe(true);
     expect(isSupportedAcpxProfileVersion("copilot", 103)).toBe(true);
+    expect(isSupportedAcpxProfileVersion("copilot", 104)).toBe(true);
   });
 
 it("preserves published v65 while binding retained-maintenance waits in v66", async () => {
@@ -784,7 +756,7 @@ it("preserves the historical sleep-maintenance v64 identity", async () => {
       const result = await verifyCopilotInstallation(QUALIFIED_ACPX_PROFILES.copilot);
       const root = fileURLToPath(new URL(`../../../provider-assets/copilot/${process.platform}-${process.arch}`, import.meta.url));
       expect(verifyNativeAcpxInstallation).toHaveBeenCalledWith({
-        distributionRoot: root, manifestPath: join(root, ".paperclip-copilot-closure.json"),
+        distributionRoot: root, manifestPath: `${root}/.paperclip-copilot-closure.json`,
         expectedClosureSha256: COPILOT_CLOSURE_SHA256[`${process.platform}-${process.arch}` as keyof typeof COPILOT_CLOSURE_SHA256],
         executable: "copilot", fixedArguments: COPILOT_LAUNCH_ARGUMENTS, isolatedCacheEnvironmentName: "COPILOT_PKG_CACHE_HOME",
         copilotDistributionDirectory: "distribution",
