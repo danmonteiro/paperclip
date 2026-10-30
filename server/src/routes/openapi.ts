@@ -696,6 +696,19 @@ const cliAuthChallengeIdParamSchema = z.string().trim()
   .describe("CLI auth challenge UUID; malformed values return 400");
 
 const ErrorSchema = registry.register("Error", z.object({ error: z.string() }));
+const NativeSessionCleanupConflictSchema = registry.register("NativeSessionCleanupConflict", z.object({
+  error: z.string(),
+  details: z.object({
+    runId: z.string().uuid(),
+    status: z.enum(["deferred", "not_eligible", "operator_required"]),
+    waitFor: z.enum([
+      "process_exit", "session_release", "environment_release", "maintenance_settlement", "lease_expiry",
+    ]).optional(),
+    retryAt: z.string().datetime().optional(),
+    taskTurnReplayed: z.literal(false),
+    taskRetried: z.literal(false),
+  }),
+}));
 
 const responses = {
   ok: (schema: z.ZodTypeAny = z.record(z.string(), z.unknown())) => ({
@@ -10918,7 +10931,13 @@ registerCurrentRoute({
   tags: ["issues"],
   summary: "Reconcile cleanup for the exact quarantined native session without retrying its task turn",
   body: retryNativeSessionCleanupSchema,
-  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict },
+  responses: {
+    200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound,
+    409: {
+      description: "Cleanup remains unproven; inspect details and wait for the exact reported condition before retrying.",
+      content: { "application/json": { schema: NativeSessionCleanupConflictSchema } },
+    },
+  },
 });
 
 registerCurrentRoute({
