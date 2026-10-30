@@ -167,6 +167,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import {
   agentWakeupRequests,
   documentRevisions,
@@ -3153,6 +3154,29 @@ export async function reconcileRetainedNativeSessionCleanup(
   return outcome;
 }
 
+/** Persisted cleanup evidence uses an isolated source stream for semantic
+ * tool inputs because runner event sequence numbers can collide with provider
+ * events. Keep the exact namespace in the query so the evidence is not lost. */
+export function retainedNativeCleanupPersistedEventsPredicate(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "id" | "companyId"> & { runnerInstanceId: string },
+): SQL {
+  return and(
+    eq(heartbeatRunEvents.runId, run.id),
+    eq(heartbeatRunEvents.companyId, run.companyId),
+    or(
+      and(
+        eq(heartbeatRunEvents.sourceInstanceId, run.runnerInstanceId),
+        inArray(heartbeatRunEvents.eventType, ["session.started", "session.resumed"]),
+      ),
+      and(
+        eq(heartbeatRunEvents.sourceInstanceId, `${run.runnerInstanceId}:semantic_tool_input`),
+        eq(heartbeatRunEvents.eventType, "semantic_tool.input"),
+      ),
+      sql`${heartbeatRunEvents.payload}->'prpEvent'->>'sourceKind' = 'control_plane'`,
+    ),
+  )!;
+}
+
 /** One exact, operator-requested cleanup-only reconciliation; it never retries the task turn. */
 export async function retryNativeSessionCleanupForRun(
   db: Db,
@@ -3513,23 +3537,7 @@ async function inspectRetainedNativeSessionCleanup(
       const persisted = await tx
         .select()
         .from(heartbeatRunEvents)
-        .where(
-          and(
-            eq(heartbeatRunEvents.runId, run.id),
-            eq(heartbeatRunEvents.companyId, run.companyId),
-            or(
-              and(
-                eq(heartbeatRunEvents.sourceInstanceId, run.runnerInstanceId),
-                inArray(heartbeatRunEvents.eventType, [
-                  "session.started",
-                  "session.resumed",
-                  "semantic_tool.input",
-                ]),
-              ),
-              sql`${heartbeatRunEvents.payload}->'prpEvent'->>'sourceKind' = 'control_plane'`,
-            ),
-          ),
-        )
+        .where(retainedNativeCleanupPersistedEventsPredicate(run))
         .limit(20);
       const notDispatchedCall = persisted.length < 20
         ? retainedNativeNotDispatchedJournalMatches({

@@ -371,6 +371,7 @@ import {
   reconcileRetainedNativeSessionCleanup,
   assertRetainedNativeSourceArchiveSettled,
   retainedNativeCleanupJournalMatches,
+  retainedNativeCleanupPersistedEventsPredicate,
   retainedNativeNotDispatchedJournalMatches,
   nativeProviderUsageLimitFromEvent,
   nativeSessionFailureSourceCode,
@@ -4079,6 +4080,15 @@ describe("retained native not-dispatched journal proof", () => {
     });
   });
 
+  it("queries persisted semantic input evidence in its isolated source namespace", () => {
+    const value = fixture();
+    const query = new PgDialect().sqlToQuery(
+      retainedNativeCleanupPersistedEventsPredicate(value.run),
+    );
+    expect(query.params).toContain(`${value.run.runnerInstanceId}:semantic_tool_input`);
+    expect(query.params).toContain("semantic_tool.input");
+  });
+
   it.each(["dispatch_error", "not_retryable_missing", "extra_input", "missing_persisted_input"])(
     "fails closed when evidence is %s",
     mode => {
@@ -4385,8 +4395,8 @@ describe("retained native cleanup activation", () => {
     };
     const semanticInputRow = {
       eventType: rawInput.eventType,
-      sourceInstanceId: rawInput.sourceInstanceId,
-      sourceEventId: rawInput.sourceEventId,
+      sourceInstanceId: `${rawInput.sourceInstanceId}:semantic_tool_input`,
+      sourceEventId: `semantic_tool_input:${rawInput.sourceEventId}`,
       sourceSeq: rawInput.sourceSeq,
       payload: { prpEvent: rawInput },
       sourcePayloadSha256: nativeSha256(rawInput),
