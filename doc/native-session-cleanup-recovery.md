@@ -42,7 +42,8 @@ cleanup hold.
   through their own recovery procedures. Use the ordinary Issue Retry action
   only after those effects are understood.
 - Every `409` includes `details.runId`, `details.status`,
-  `details.taskTurnReplayed: false`, and `details.taskRetried: false`.
+  a specific `details.nextAction`, `details.taskTurnReplayed: false`, and
+  `details.taskRetried: false`.
 - For `details.status: "deferred"`, wait for the reported `details.waitFor`
   condition (`process_exit`, `session_release`, `environment_release`,
   `maintenance_settlement`, or `lease_expiry`). A `lease_expiry` response also
@@ -51,10 +52,13 @@ cleanup hold.
   force eligibility. Retry this exact cleanup action only after the named
   condition has resolved.
 - `details.status: "not_eligible"` means this run does not satisfy the
-  supported identity/state contract. `details.status: "operator_required"`
-  means a maintenance attempt could not prove a safe settlement. Preserve all
-  evidence and escalate for investigation; do not use a generic restart,
-  delete retained state, or replay the task turn.
+  supported identity/state contract. Follow `details.nextAction`: preserve the
+  exact session and checkpoint, inspect run/session/runner/process ownership,
+  and do not clear state, restart the service, or retry the task.
+- `details.status: "operator_required"` means a maintenance attempt could not
+  prove a safe settlement. Follow `details.nextAction`: keep this Issue blocked
+  and have an operator prove the exact provider turn and process are settled.
+  Do not delete retained state or replay the task turn.
 
 Every attempt is activity-logged against the Issue and exact run, including its
 outcome and the invariant that the task turn was not replayed.

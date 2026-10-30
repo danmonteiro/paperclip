@@ -299,6 +299,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
           status: "deferred",
           waitFor: "lease_expiry",
           retryAt: "2026-10-30T12:34:56.000Z",
+          nextAction: "Wait for lease_expiry until 2026-10-30T12:34:56.000Z, then retry cleanup for this exact run.",
           taskTurnReplayed: false,
           taskRetried: false,
         },
@@ -312,6 +313,41 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       retry.mockRestore();
     }
   });
+
+  it.each(["not_eligible", "operator_required"] as const)(
+    "returns a specific evidence-preserving next action when cleanup is %s",
+    async (status) => {
+      const fixture = await seedCompany();
+      const runId = randomUUID();
+      const retry = vi.spyOn(nativeSessionExecutor, "retryNativeSessionCleanupForRun").mockResolvedValue({
+        runId,
+        status,
+      });
+      try {
+        const response = await request(createApp())
+          .post(`/api/issues/${fixture.sourceIssueId}/recovery-actions/retry-native-session-cleanup`)
+          .send({ runId })
+          .expect(409);
+
+        expect(response.body.details).toMatchObject({
+          runId,
+          status,
+          nextAction: expect.stringMatching(/Preserve|Keep this Issue blocked/),
+          taskTurnReplayed: false,
+          taskRetried: false,
+        });
+        if (status === "not_eligible") {
+          expect(response.body.details.nextAction).toContain("Inspect its exact run, session, runner, and process ownership evidence");
+          expect(response.body.details.nextAction).toContain("do not clear state, restart the service, or retry the task");
+        } else {
+          expect(response.body.details.nextAction).toContain("prove the provider turn and process are settled");
+        }
+        expect(retry).toHaveBeenCalledWith(db, { companyId: fixture.companyId, issueId: fixture.sourceIssueId, runId });
+      } finally {
+        retry.mockRestore();
+      }
+    },
+  );
 
   async function seedNativeFinalizationRecovery(status: string) {
     const fixture = await seedCompany();

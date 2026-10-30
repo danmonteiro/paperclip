@@ -539,6 +539,7 @@ describe("openapi routes", () => {
       "process_exit", "session_release", "environment_release", "maintenance_settlement", "lease_expiry",
     ]);
     expect(details.retryAt).toMatchObject({ type: "string", format: "date-time" });
+    expect(details.nextAction).toMatchObject({ type: "string", minLength: 1 });
     expect(details.taskTurnReplayed.enum).toEqual([false]);
     expect(details.taskRetried.enum).toEqual([false]);
   });

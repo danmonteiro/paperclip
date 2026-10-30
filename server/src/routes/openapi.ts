@@ -705,6 +705,7 @@ const NativeSessionCleanupConflictSchema = registry.register("NativeSessionClean
       "process_exit", "session_release", "environment_release", "maintenance_settlement", "lease_expiry",
     ]).optional(),
     retryAt: z.string().datetime().optional(),
+    nextAction: z.string().min(1),
     taskTurnReplayed: z.literal(false),
     taskRetried: z.literal(false),
   }),

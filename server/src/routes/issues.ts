@@ -9808,8 +9808,13 @@ export function issueRoutes(
       const wait = outcome.status === "deferred"
         ? `; wait for ${outcome.waitFor}${outcome.waitFor === "lease_expiry" ? ` until ${outcome.retryAt.toISOString()}` : ""}`
         : "";
+      const nextAction = outcome.status === "deferred"
+        ? `Wait for ${outcome.waitFor}${outcome.waitFor === "lease_expiry" ? ` until ${outcome.retryAt.toISOString()}` : ""}, then retry cleanup for this exact run.`
+        : outcome.status === "not_eligible"
+          ? "Preserve this run's session and checkpoint. Inspect its exact run, session, runner, and process ownership evidence; do not clear state, restart the service, or retry the task."
+          : "Keep this Issue blocked and preserve all retained evidence. Have an operator inspect this exact run and prove the provider turn and process are settled before any cleanup or task retry.";
       throw conflict(
-        `Native session cleanup remains ${outcome.status}${wait}. The task turn was not retried; inspect the exact run and process evidence before any further recovery.`,
+        `Native session cleanup remains ${outcome.status}${wait}. The task turn was not retried. ${nextAction}`,
         {
           runId: outcome.runId,
           status: outcome.status,
@@ -9817,6 +9822,7 @@ export function issueRoutes(
             waitFor: outcome.waitFor,
             ...(outcome.waitFor === "lease_expiry" ? { retryAt: outcome.retryAt.toISOString() } : {}),
           } : {}),
+          nextAction,
           taskTurnReplayed: false,
           taskRetried: false,
         },
