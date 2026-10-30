@@ -9782,10 +9782,28 @@ export function issueRoutes(
       issueId: issue.id,
       runId: req.body.runId,
     });
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: issue.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      agentApiKeyId: actor.agentApiKeyId,
+      action: "issue.native_session_cleanup_retry",
+      entityType: "heartbeat_run",
+      entityId: req.body.runId,
+      issueId: issue.id,
+      details: {
+        cleanupStatus: status,
+        taskTurnReplayed: false,
+        taskRetried: false,
+      },
+    });
     if (status !== "settled") {
       throw conflict(`Native session cleanup retry was not completed (${status}). The task turn was not retried; inspect the exact run and process evidence before any further recovery.`);
     }
-    logger.info({ companyId: issue.companyId, issueId: issue.id, runId: req.body.runId, actorId: getActorInfo(req).actorId },
+    logger.info({ companyId: issue.companyId, issueId: issue.id, runId: req.body.runId, actorId: actor.actorId },
       "Operator settled exact quarantined native session cleanup");
     res.json({ status: "settled", runId: req.body.runId, turnReplayed: false, taskRetried: false,
       nextAction: "The cleanup hold is retired. Review the saved run, then use the Issue Retry action separately if its effects are reconciled." });
