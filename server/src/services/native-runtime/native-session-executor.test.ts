@@ -4062,6 +4062,23 @@ describe("retained native not-dispatched journal proof", () => {
     });
   });
 
+  it("accepts committed semantic input evidence stored in its isolated source namespace", () => {
+    const value = fixture();
+    value.persisted[0]!.sourceInstanceId = `${value.run.runnerInstanceId}:semantic_tool_input`;
+    value.persisted[0]!.sourceEventId = `semantic_tool_input:${value.sourceEventId}`;
+    expect(retainedNativeNotDispatchedJournalMatches({
+      run: value.run,
+      control: value.control,
+      providerSessionId: "thread-not-dispatched",
+      providerPid: 99999998,
+      persistedEvents: value.persisted,
+    })).toEqual({
+      callId: value.callId,
+      operationId: value.operationId,
+      sourceEventId: value.sourceEventId,
+    });
+  });
+
   it.each(["dispatch_error", "not_retryable_missing", "extra_input", "missing_persisted_input"])(
     "fails closed when evidence is %s",
     mode => {

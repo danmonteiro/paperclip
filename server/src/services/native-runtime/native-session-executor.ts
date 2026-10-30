@@ -2570,12 +2570,20 @@ export function retainedNativeNotDispatchedJournalMatches(input: {
     const parsed = validatePrpEvent(record(row.payload).prpEvent);
     return parsed.ok && parsed.event.runId === run.id &&
       parsed.event.normalizedSessionId === run.nativeSessionId &&
-      parsed.event.sourceInstanceId === row.sourceInstanceId &&
-      parsed.event.sourceEventId === row.sourceEventId && parsed.event.sourceSeq === row.sourceSeq &&
+      (parsed.event.sourceInstanceId === row.sourceInstanceId &&
+        parsed.event.sourceEventId === row.sourceEventId ||
+        (parsed.event.eventType === "semantic_tool.input" &&
+          row.sourceInstanceId === `${parsed.event.sourceInstanceId}:semantic_tool_input` &&
+          row.sourceEventId === `semantic_tool_input:${parsed.event.sourceEventId}`)) &&
+      parsed.event.sourceSeq === row.sourceSeq &&
       row.sourcePayloadSha256 === nativeSha256(parsed.event);
   });
-  if (!persisted.some(row => row.sourceInstanceId === run.runnerInstanceId &&
-    row.sourceEventId === toolInputs[0]!.sourceEventId && row.eventType === "semantic_tool.input")) return null;
+  if (!persisted.some(row => {
+    if (row.eventType !== "semantic_tool.input") return false;
+    const parsed = validatePrpEvent(record(row.payload).prpEvent);
+    return parsed.ok && parsed.event.sourceInstanceId === run.runnerInstanceId &&
+      parsed.event.sourceEventId === toolInputs[0]!.sourceEventId;
+  })) return null;
   const commands = control.commands as Array<Record<string, unknown>>;
   const pending = commands.filter(command => command.status === "pending");
   const resultCommands = pending.filter(command => command.type === "semantic_tool.result");
@@ -12475,7 +12483,7 @@ async function createRunnerdBackendWithinSessionClaim(
         recordTimingReceipt: process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ? recordRunnerTimingReceipt : undefined,
         ...owner.driver, runnerArtifact: input.controllerPersistence?.runnerArtifact ?? description.runner,
         onSemanticToolInputCommitted: async event => {
-          await controlPlane.appendEvent(event);
+          await controlPlane.appendSemanticToolInputEvidence(event);
         },
         controlPlaneRegistration: input.controllerPersistence ? async (authority, identity, signal) => {
           await nativeRunnerCheckpointRegistration({
@@ -13971,7 +13979,7 @@ async function createRunnerdBackendWithinSessionClaim(
           event,
         }),
         onSemanticToolInputCommitted: async event => {
-          await controlPlane.appendEvent(event);
+          await controlPlane.appendSemanticToolInputEvidence(event);
         },
         provider:
           input.execution.provider.kind === "codex"
