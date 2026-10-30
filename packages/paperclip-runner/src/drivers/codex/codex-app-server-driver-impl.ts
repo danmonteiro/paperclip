@@ -3,6 +3,7 @@ import { writeManagedCodexObservability, redactObservabilityDiagnostic } from ".
 import { trustCodexStartupRoot } from "./codex-startup-trust.js";
 import { readCodexThreadState, readCodexTurnMetadata } from "./codex-history.js";
 import { codexExecutableReadOnlyRoots } from "./codex-security-config.js";
+import { rejectUnsafeCodexCleanupRetry } from "./codex-cleanup-recovery.js";
 
 import type {
   HarnessDriver,
@@ -678,11 +679,7 @@ export class CodexAppServerDriver implements HarnessDriver {
     }
   }
 
-  /** A fresh runnerd transport can restore provider state. Cleanup retries must
-   * go through the server's isolated retained-session reconciler instead. */
-  async retryCleanup(): Promise<void> {
-    throw new Error("runnerd cleanup retry requires retained native session reconciliation");
-  }
+  async retryCleanup(): Promise<void> { return rejectUnsafeCodexCleanupRetry(); }
 
   #resumeThreadParams(threadId: string, workingDirectory: string): Record<string, unknown> {
     return {
